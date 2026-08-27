@@ -1,0 +1,12 @@
+{
+  "appId": "ru.samotsvety.gems",
+  "appName": "Самоцветы",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#0a0713",
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

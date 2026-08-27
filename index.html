@@ -1,0 +1,1212 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Самоцветы — слияние камней</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0a0713">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#08060f;
+    font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;-webkit-tap-highlight-color:transparent;}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 0%,#1b1430 0%,#0d0a1c 55%,#050409 100%);}
+  /* Канва вписывается в экран, сохраняя пропорции 480x800.
+     Задавать height:100% нельзя: тогда aspect-ratio игнорируется, а max-width
+     просто сплющивает картинку — на узком телефоне игра ехала по вертикали.
+     У canvas есть собственные пропорции, поэтому двух max- ограничений хватает. */
+  canvas{display:block;width:auto;height:auto;max-width:100%;max-height:100%;
+    touch-action:none;
+    border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.75),0 0 0 1px rgba(160,140,255,.12);
+    cursor:crosshair;}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game"></canvas></div>
+<script>
+"use strict";
+
+/* ============== КОНСТАНТЫ ============== */
+var W = 480, H = 800;
+var BOARD  = { l: 18, r: 462, t: 96, b: 672 };
+var LAUNCH = { x: 240, y: 742 };
+var GRAV = 1500;
+var SPEED = 1200;
+var MAX_ANG = 55 * Math.PI / 180;
+/* ствол «гуляет»: точный повтор выстрела невозможен */
+var JIT_ANG = 3.5 * Math.PI / 180;
+var JIT_SPD = 0.05;
+var GUIDE_STEPS = 26;               /* подсказка показывает только направление, не место падения */
+var PEBBLE_VARIANTS = 6;            /* столько разных силуэтов гальки держим в спрайтах */
+
+var BASE_SHOTS = 90;
+
+/* Сундук выпадает при слиянии. Слияний примерно MERGE_RATE на выстрел, поэтому
+   прибавка камней за выстрел = MERGE_RATE * CHEST_CHANCE * CHEST_BONUS.
+   Она обязана быть заметно меньше 1, иначе лимит растёт быстрее, чем тратится,
+   и счётчик камней перестаёт быть концом партии. Числа подобраны на замере ниже. */
+var CHEST_CHANCE = 0.02;
+var CHEST_BONUS = 10;
+var CHEST_SCORE = 150;
+
+/* второй, аварийный конец — куча доросла до черты */
+var DANGER_Y = BOARD.t + 58;
+var DANGER_HOLD = 1.6;              /* сек. над чертой, прежде чем засчитать переполнение */
+
+/* 0 — сундук, 1 — невзрачная галька ... 7 — бриллиант (улетает) */
+var GEMS = [
+  { name:"Сундук", r:24, c1:"#ffcf5c", c2:"#8a5a12", c3:"#fff3c4", facets:0, chest:true },
+  { name:"Галька",    r:15, c1:"#aab2bd", c2:"#5c636e", c3:"#eef2f7", facets:0 },
+  { name:"Аметист",   r:20, c1:"#bb86ee", c2:"#4e2185", c3:"#f3e2ff", facets:6 },
+  { name:"Изумруд",   r:26, c1:"#4fdc9c", c2:"#0a6242", c3:"#dcfff0", facets:6 },
+  { name:"Топаз",     r:32, c1:"#ffd166", c2:"#94640a", c3:"#fff6d8", facets:6 },
+  { name:"Сапфир",    r:39, c1:"#6ea8ff", c2:"#12357f", c3:"#dbe9ff", facets:8 },
+  { name:"Рубин",     r:48, c1:"#ff7382", c2:"#8b0d26", c3:"#ffe1e6", facets:8 },
+  { name:"Бриллиант", r:60, c1:"#c7ecff", c2:"#4d86ad", c3:"#ffffff", facets:8 }
+];
+var TOP = 7;                        /* последний камень — улетает */
+var SCORES = [0, 0, 10, 25, 60, 140, 320, 1500];
+var POOL   = [1,1,1,1,1,2,2,2,3];   /* в пул для запуска идут только первые 3 */
+
+/* ============== CANVAS ============== */
+var cv = document.getElementById("game");
+var ctx = cv.getContext("2d");
+var DPR = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * DPR; cv.height = H * DPR;
+ctx.setTransform(DPR,0,0,DPR,0,0);
+
+/* ============== ЗВУК ============== */
+var AC = null, muted = false;
+function audio(){
+  if (muted) return null;
+  try { if (!AC) AC = new (window.AudioContext||window.webkitAudioContext)(); } catch(e){ return null; }
+  if (AC.state === "suspended") AC.resume();
+  return AC;
+}
+function tone(freq, dur, type, vol, delay){
+  var ac = audio(); if(!ac) return;
+  var t0 = ac.currentTime + (delay||0);
+  var o = ac.createOscillator(), g = ac.createGain();
+  o.type = type||"sine"; o.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.linearRampToValueAtTime(vol||0.12, t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(ac.destination);
+  o.start(t0); o.stop(t0 + dur + 0.05);
+}
+function sfxLaunch(){ tone(180, 0.13, "triangle", 0.09); tone(90, 0.18, "sine", 0.07); }
+function sfxMerge(t){ var b = 320 * Math.pow(1.18, t); tone(b,0.16,"triangle",0.10); tone(b*1.5,0.22,"sine",0.08,0.04); }
+function sfxWall(v){ tone(140+Math.random()*40, 0.06, "sine", Math.min(0.07, v/9000)); }
+function sfxDiamond(){ var d=[0,0.09,0.18,0.27,0.38]; for(var i=0;i<5;i++) tone(523*Math.pow(1.26,i),0.5,"triangle",0.10,d[i]); }
+function sfxOver(){ var f=[440,392,330,262]; for(var i=0;i<4;i++) tone(f[i],0.5,"sine",0.10,i*0.16); }
+function sfxChest(){
+  tone(160, 0.16, "square", 0.07);
+  var f=[784,988,1175,1568];
+  for(var i=0;i<4;i++) tone(f[i], 0.34, "triangle", 0.09, 0.05 + i*0.07);
+}
+
+/* ============== СОСТОЯНИЕ ============== */
+var S;
+function pick(){ return POOL[(Math.random()*POOL.length)|0]; }
+function reset(){
+  S = {
+    gems: [], parts: [], pops: [],
+    queue: [pick(), pick()],
+    shots: 0, left: BASE_SHOTS, score: 0, diamonds: 0, chests: 0, merges: 0,
+    over: false, reason: "", danger: 0, settle: 0, endWait: 0, shake: 0, chestFlash: 0,
+    aim: { x: 240, y: 300 },
+    time: 0, flash: 0
+  };
+  acc = 0; prev = performance.now();   /* чистые часы на рестарт, без скачка dt */
+}
+
+/* ============== ХРАНИЛИЩЕ ==============
+   localStorage доступен не всегда: в data:-URL он запрещён совсем, в file://
+   и приватных окнах — как повезёт. Прячем это за две функции и один флаг,
+   чтобы игра не падала, а игрок понимал, сохранятся его результаты или нет. */
+function storeGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+function storeSet(k, v){ try { localStorage.setItem(k, v); return true; } catch(e){ return false; } }
+var STORAGE_OK = storeSet("__gm_probe", "1");
+if (STORAGE_OK) { try { localStorage.removeItem("__gm_probe"); } catch(e){} }
+
+var best = parseInt(storeGet("gemMergeBest") || "0", 10) || 0;
+
+/* ============== ИСТОРИЯ ПАРТИЙ ============== */
+var HIST_KEY = "gemMergeHistory";
+var HIST_MAX = 10;
+var hist = [];
+var showRecords = false;
+try {
+  var raw = storeGet(HIST_KEY);
+  hist = raw ? JSON.parse(raw) : [];
+  if (!Array.isArray(hist)) hist = [];
+} catch(e){ hist = []; }
+
+function pushHistory(){
+  hist.unshift({ s:S.score, d:S.diamonds, c:S.chests, n:S.shots, t:Date.now() });
+  if (hist.length > HIST_MAX) hist.length = HIST_MAX;
+  storeSet(HIST_KEY, JSON.stringify(hist));
+}
+function fmtDate(ts){
+  var d = new Date(ts), p = function(n){ return (n<10?"0":"") + n; };
+  return p(d.getDate()) + "." + p(d.getMonth()+1) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+function makeGem(tier, x, y){
+  var d = GEMS[tier];
+  return { tier:tier, x:x, y:y, vx:0, vy:0, r:d.r, m:d.r*d.r,
+           angle: Math.random()*6.283, spin:0, bx:x,
+           flying:false, dead:false,
+           state:"live", t:0, variant:(Math.random()*PEBBLE_VARIANTS)|0 };
+}
+
+/* ============== ЗАПУСК ============== */
+function aimAngle(){
+  var dx = S.aim.x - LAUNCH.x, dy = S.aim.y - LAUNCH.y;
+  var a = Math.atan2(dx, -dy);              /* 0 = строго вверх */
+  return Math.max(-MAX_ANG, Math.min(MAX_ANG, a));
+}
+function fire(){
+  if (S.over || S.left <= 0) return;
+  var tier = S.queue.shift();
+  S.queue.push(pick());
+  /* разброс ствола — прицелиться в конкретный камень уже не выйдет */
+  var a = aimAngle() + (Math.random()-0.5)*2*JIT_ANG;
+  var sp = SPEED * (1 + (Math.random()-0.5)*2*JIT_SPD);
+  var g = makeGem(tier, LAUNCH.x, LAUNCH.y);
+  g.vx = Math.sin(a)*sp;
+  g.vy = -Math.cos(a)*sp;
+  g.flying = true;
+  g.spin = (Math.random()-0.5)*7;
+  S.gems.push(g);
+  S.shots++;
+  S.left--;
+  burst(LAUNCH.x, LAUNCH.y-10, "#b9a6ff", 10, 160);
+  sfxLaunch();
+}
+
+/* ============== ФИЗИКА ============== */
+function walls(g){
+  if (g.x - g.r < BOARD.l){
+    g.x = BOARD.l + g.r;
+    if (g.vx < 0){ if (Math.abs(g.vx) > 260) sfxWall(Math.abs(g.vx)); g.vx = -g.vx*0.32; }
+    g.spin += g.vy*0.002;
+  }
+  if (g.x + g.r > BOARD.r){
+    g.x = BOARD.r - g.r;
+    if (g.vx > 0){ if (Math.abs(g.vx) > 260) sfxWall(Math.abs(g.vx)); g.vx = -g.vx*0.32; }
+    g.spin -= g.vy*0.002;
+  }
+  if (g.y - g.r < BOARD.t){ g.y = BOARD.t + g.r; if (g.vy < 0) g.vy = -g.vy*0.30; }
+  if (!g.flying && g.y + g.r > BOARD.b){
+    g.y = BOARD.b - g.r;
+    if (g.vy > 0){ if (g.vy > 300) sfxWall(g.vy); g.vy = -g.vy*0.22; }
+    g.vx *= 0.88; g.spin = g.vx*0.02;
+  }
+  if (g.flying && g.y > H + 80) g.dead = true;
+}
+
+function collide(a, b){
+  var dx = b.x-a.x, dy = b.y-a.y;
+  var min = a.r + b.r;
+  var d2 = dx*dx + dy*dy;
+  if (d2 >= min*min || d2 === 0) return;
+  var d = Math.sqrt(d2);
+  var nx = dx/d, ny = dy/d, ov = min - d;
+  var ta = a.m, tb = b.m, tot = ta + tb, c = ov*0.85;
+  a.x -= nx*c*(tb/tot); a.y -= ny*c*(tb/tot);
+  b.x += nx*c*(ta/tot); b.y += ny*c*(ta/tot);
+  var rvx = b.vx-a.vx, rvy = b.vy-a.vy;
+  var vn = rvx*nx + rvy*ny;
+  if (vn < 0){
+    var j = -1.15*vn / (1/ta + 1/tb);
+    a.vx -= j*nx/ta; a.vy -= j*ny/ta;
+    b.vx += j*nx/tb; b.vy += j*ny/tb;
+    var vt = rvx*(-ny) + rvy*nx;
+    a.spin += vt*0.0018; b.spin -= vt*0.0018;
+  }
+}
+
+function physics(dt){
+  var gs = S.gems, i, j, it, g;
+  for (i=0;i<gs.length;i++){
+    g = gs[i];
+    g.t += dt;
+    if (g.state === "born"){
+      if (g.t > 0.55){ g.state = "fly"; g.t = 0; g.vy = -90; sfxDiamond(); }
+      continue;
+    }
+    if (g.state === "fly"){
+      g.vy -= 2400*dt;
+      g.y += g.vy*dt;
+      g.x = g.bx + Math.sin(g.t*7)*16;
+      g.angle += 5*dt;
+      if (Math.random() < 0.75) spark(g.x + (Math.random()-0.5)*g.r, g.y + g.r*0.4);
+      if (g.y < -170) g.dead = true;
+      continue;
+    }
+    g.vy += GRAV*dt;
+    g.x += g.vx*dt; g.y += g.vy*dt;
+    g.vx *= 0.9985;
+    g.angle += g.spin*dt; g.spin *= 0.985;
+    if (g.flying && g.y + g.r <= BOARD.b) g.flying = false;
+  }
+  for (it=0; it<4; it++){
+    for (i=0;i<gs.length;i++){
+      var a = gs[i];
+      if (a.state !== "live" || a.dead) continue;
+      if (!a.flying){
+        for (j=i+1;j<gs.length;j++){
+          var b = gs[j];
+          if (b.state !== "live" || b.dead || b.flying) continue;
+          collide(a, b);
+        }
+      }
+      walls(a);
+    }
+  }
+  mergePass();
+  chestPass();
+  var alive = [];
+  for (i=0;i<S.gems.length;i++) if (!S.gems[i].dead) alive.push(S.gems[i]);
+  S.gems = alive;
+}
+
+/* сундук выбрасывает при слиянии; он кувыркается и вскрывается, когда уляжется */
+function spawnChest(x, y){
+  var c = makeGem(0, x, y - 12);
+  c.vx = (Math.random()-0.5)*240;
+  c.vy = -340 - Math.random()*130;
+  c.spin = (Math.random()-0.5)*7;
+  S.gems.push(c);
+  burst(x, y, "#ffd75e", 14, 210);
+}
+function chestPass(){
+  var gs = S.gems, i;
+  for (i=0;i<gs.length;i++){
+    var c = gs[i];
+    if (c.tier !== 0 || c.dead || c.state !== "live") continue;
+    var slow = Math.abs(c.vx) + Math.abs(c.vy) < 70;
+    if ((c.t > 0.5 && slow) || c.t > 6) openChest(c);
+  }
+}
+
+function openChest(c){
+  c.dead = true;
+  S.left += CHEST_BONUS;
+  S.score += CHEST_SCORE;
+  S.chests++; S.chestFlash = 1.6;
+  burst(c.x, c.y, "#ffd75e", 42, 340);
+  burst(c.x, c.y, "#fff3c4", 22, 170);
+  pop(c.x, c.y - 52, "+" + CHEST_BONUS + " КАМНЕЙ", "#ffe9a8", 25);
+  pop(c.x, c.y - 20, "+" + CHEST_SCORE, "#fff3c4", 18);
+  S.shake = 12; S.flash = 0.55;
+  sfxChest();
+}
+
+function mergePass(){
+  var gs = S.gems, i, j;
+  for (i=0;i<gs.length;i++){
+    var a = gs[i];
+    if (a.state!=="live" || a.flying || a.dead || a.tier === 0) continue;
+    for (j=i+1;j<gs.length;j++){
+      var b = gs[j];
+      if (b.state!=="live" || b.flying || b.dead) continue;
+      if (a.tier !== b.tier) continue;
+      var dx = b.x-a.x, dy = b.y-a.y, min = a.r+b.r;
+      if (dx*dx + dy*dy <= min*min){ doMerge(a,b); break; }
+    }
+  }
+}
+
+function doMerge(a, b){
+  a.dead = true; b.dead = true;
+  var nt = a.tier + 1;
+  var x = (a.x + b.x)/2, y = (a.y + b.y)/2;
+  var g = makeGem(nt, x, y);
+  g.vx = (a.vx + b.vx)*0.25;
+  g.vy = (a.vy + b.vy)*0.25 - 40;
+  var d = GEMS[nt];
+
+  if (nt === TOP){
+    g.state = "born"; g.t = 0; g.bx = x; g.vx = 0; g.vy = 0;
+    S.diamonds++; S.flash = 1;
+    shockwave(x, y);
+    burst(x, y, "#ffffff", 46, 420);
+    pop(x, y-42, "БРИЛЛИАНТ!", "#eaf7ff", 30);
+    pop(x, y-4, "+" + SCORES[TOP], "#ffe9a8", 26);
+    S.shake = 16;
+  } else {
+    burst(x, y, d.c1, 10 + nt*7, 120 + nt*45);
+    pop(x, y, "+" + SCORES[nt], d.c3, 15 + nt*2);
+    S.shake = Math.min(12, 2 + nt*2);
+  }
+  S.gems.push(g);
+  S.score += SCORES[nt];
+  S.merges++;
+  sfxMerge(nt);
+  if (Math.random() < CHEST_CHANCE) spawnChest(x, y);
+}
+
+function shockwave(x, y){
+  for (var i=0;i<S.gems.length;i++){
+    var o = S.gems[i];
+    if (o.state!=="live" || o.dead) continue;
+    var dx = o.x-x, dy = o.y-y, d = Math.sqrt(dx*dx+dy*dy) || 1;
+    if (d < 190){
+      var f = (1 - d/190) * 900;
+      o.vx += dx/d*f; o.vy += dy/d*f - 60;
+      o.spin += (Math.random()-0.5)*8;
+    }
+  }
+}
+
+/* ============== ЧАСТИЦЫ ============== */
+function burst(x, y, color, n, spd){
+  spd = spd || 200;
+  for (var i=0;i<n;i++){
+    var a = Math.random()*6.283, v = spd*(0.35+Math.random()*0.9);
+    S.parts.push({ x:x, y:y, vx:Math.cos(a)*v, vy:Math.sin(a)*v - 60,
+      life:0, max:0.45+Math.random()*0.6, s:1.6+Math.random()*3.2, c:color });
+  }
+}
+function spark(x, y){
+  S.parts.push({ x:x, y:y, vx:(Math.random()-0.5)*70, vy:120+Math.random()*160,
+    life:0, max:0.5+Math.random()*0.4, s:1.5+Math.random()*2.5, c:"#dff3ff" });
+}
+function pop(x, y, text, color, size){
+  S.pops.push({ x:x, y:y, text:text, color:color, size:size||16, life:0, max:1.25 });
+}
+function updateFx(dt){
+  var i, keep = [];
+  for (i=0;i<S.parts.length;i++){
+    var p = S.parts[i];
+    p.life += dt; p.vy += 620*dt; p.x += p.vx*dt; p.y += p.vy*dt; p.vx *= 0.97;
+    if (p.life < p.max) keep.push(p);
+  }
+  S.parts = keep;
+  var keep2 = [];
+  for (i=0;i<S.pops.length;i++){
+    var q = S.pops[i];
+    q.life += dt; q.y -= 42*dt;
+    if (q.life < q.max) keep2.push(q);
+  }
+  S.pops = keep2;
+}
+
+/* ============== ТРАЕКТОРИЯ ============== */
+/* Короткий отрезок у самого ствола: показывает направление и разброс,
+   но не место падения — иначе выстрел снизу становится точным. */
+function predict(angOff, spdMul, steps){
+  var tier = S.queue[0], r = GEMS[tier].r;
+  var a = aimAngle() + (angOff || 0);
+  var sp = SPEED * (spdMul === undefined ? 1 : spdMul);
+  var x = LAUNCH.x, y = LAUNCH.y;
+  var vx = Math.sin(a)*sp, vy = -Math.cos(a)*sp;
+  var flying = true;
+  var dt = 1/120, pts = [];
+  for (var i=0;i<steps;i++){
+    vy += GRAV*dt; x += vx*dt; y += vy*dt;
+    if (flying && y + r <= BOARD.b) flying = false;
+    if (x - r < BOARD.l){ x = BOARD.l + r; vx = -vx*0.32; }
+    if (x + r > BOARD.r){ x = BOARD.r - r; vx = -vx*0.32; }
+    if (y - r < BOARD.t){ y = BOARD.t + r; vy = -vy*0.30; }
+    if (y < BOARD.b) pts.push([x,y]);
+    if (!flying && y + r >= BOARD.b) break;
+  }
+  return pts;
+}
+
+/* ============== ОТРИСОВКА КАМНЕЙ ============== */
+function poly(n, r, rot){
+  var p = [];
+  for (var i=0;i<n;i++){ var a = rot + i*6.283185/n; p.push([Math.cos(a)*r, Math.sin(a)*r]); }
+  return p;
+}
+function star4(x, y, s, alpha){
+  ctx.save(); ctx.translate(x,y); ctx.globalAlpha = alpha;
+  ctx.fillStyle = "#fff"; ctx.beginPath();
+  ctx.moveTo(0,-s); ctx.quadraticCurveTo(s*0.16,-s*0.16, s,0);
+  ctx.quadraticCurveTo(s*0.16,s*0.16, 0,s);
+  ctx.quadraticCurveTo(-s*0.16,s*0.16, -s,0);
+  ctx.quadraticCurveTo(-s*0.16,-s*0.16, 0,-s);
+  ctx.fill(); ctx.restore();
+}
+function drawPebble(r, shape){
+  var n = shape.length, pts = [], i;
+  for (i=0;i<n;i++){ var a = i*6.283185/n; pts.push([Math.cos(a)*r*shape[i], Math.sin(a)*r*shape[i]]); }
+  ctx.beginPath();
+  ctx.moveTo((pts[0][0]+pts[n-1][0])/2, (pts[0][1]+pts[n-1][1])/2);
+  for (i=0;i<n;i++){
+    var c = pts[i], nx = pts[(i+1)%n];
+    ctx.quadraticCurveTo(c[0], c[1], (c[0]+nx[0])/2, (c[1]+nx[1])/2);
+  }
+  ctx.closePath();
+  var g = ctx.createRadialGradient(-r*0.35,-r*0.42,r*0.08, 0,0,r*1.15);
+  g.addColorStop(0,"#eff3f8"); g.addColorStop(0.42,"#aab2bd");
+  g.addColorStop(0.78,"#767e89"); g.addColorStop(1,"#4b525c");
+  ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = "rgba(20,22,30,.55)"; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.fillStyle = "rgba(60,66,76,.5)";
+  ctx.beginPath(); ctx.ellipse(r*0.26,r*0.12,r*0.19,r*0.13,0.6,0,6.283); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(-r*0.1,r*0.42,r*0.13,r*0.09,-0.4,0,6.283); ctx.fill();
+  star4(-r*0.36,-r*0.42, r*0.2, 0.5);
+}
+function drawCut(tier, r){
+  var d = GEMS[tier], n = d.facets, rot = -Math.PI/2, i;
+  var outer = poly(n, r, rot);
+  ctx.beginPath();
+  for (i=0;i<n;i++){ if(i) ctx.lineTo(outer[i][0],outer[i][1]); else ctx.moveTo(outer[i][0],outer[i][1]); }
+  ctx.closePath();
+  if (tier === TOP){ ctx.shadowColor = "rgba(190,240,255,.95)"; ctx.shadowBlur = 26; }
+  var g = ctx.createRadialGradient(-r*0.32,-r*0.38,r*0.05, 0,0,r*1.1);
+  g.addColorStop(0, d.c3); g.addColorStop(0.38, d.c1); g.addColorStop(1, d.c2);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.shadowBlur = 0;
+  for (i=0;i<n;i++){
+    var p1 = outer[i], p2 = outer[(i+1)%n];
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(p1[0],p1[1]); ctx.lineTo(p2[0],p2[1]); ctx.closePath();
+    ctx.fillStyle = (i % 2) ? "rgba(255,255,255,.11)" : "rgba(0,0,0,.15)";
+    ctx.fill();
+  }
+  var inner = poly(n, r*0.47, rot + Math.PI/n);
+  ctx.beginPath();
+  for (i=0;i<n;i++){ if(i) ctx.lineTo(inner[i][0],inner[i][1]); else ctx.moveTo(inner[i][0],inner[i][1]); }
+  ctx.closePath();
+  var g2 = ctx.createLinearGradient(-r*0.4,-r*0.4, r*0.4, r*0.4);
+  g2.addColorStop(0, d.c3); g2.addColorStop(1, d.c1);
+  ctx.fillStyle = g2; ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.45)"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath();
+  for (i=0;i<n;i++){ if(i) ctx.lineTo(outer[i][0],outer[i][1]); else ctx.moveTo(outer[i][0],outer[i][1]); }
+  ctx.closePath();
+  ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 1.6; ctx.stroke();
+  star4(-r*0.3,-r*0.34, r*0.26, 0.9);
+  star4(r*0.34, r*0.2, r*0.13, 0.55);
+}
+function drawChest(r){
+  var w = r*1.75, h = r*1.4;
+  /* свет, бьющий из щели */
+  var glow = ctx.createRadialGradient(0,-h*0.05,2, 0,-h*0.05,r*1.7);
+  glow.addColorStop(0,"rgba(255,226,130,.55)");
+  glow.addColorStop(1,"rgba(255,200,80,0)");
+  ctx.fillStyle = glow;
+  ctx.beginPath(); ctx.arc(0,-h*0.05,r*1.7,0,6.283); ctx.fill();
+  /* короб */
+  var body = ctx.createLinearGradient(0,-h*0.1,0,h*0.62);
+  body.addColorStop(0,"#8f5f2e"); body.addColorStop(1,"#452911");
+  ctx.fillStyle = body;
+  roundRect(-w/2, -h*0.06, w, h*0.64, 4); ctx.fill();
+  ctx.strokeStyle = "#2a1708"; ctx.lineWidth = 1.4; ctx.stroke();
+  /* крышка */
+  var lid = ctx.createLinearGradient(0,-h*0.66,0,-h*0.02);
+  lid.addColorStop(0,"#ab7439"); lid.addColorStop(1,"#66401d");
+  ctx.beginPath();
+  ctx.moveTo(-w/2,-h*0.04);
+  ctx.quadraticCurveTo(-w/2,-h*0.66, 0,-h*0.66);
+  ctx.quadraticCurveTo( w/2,-h*0.66, w/2,-h*0.04);
+  ctx.closePath();
+  ctx.fillStyle = lid; ctx.fill();
+  ctx.strokeStyle = "#2a1708"; ctx.stroke();
+  /* золотые полосы */
+  ctx.strokeStyle = "#f2c552"; ctx.lineWidth = r*0.13; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(-w*0.27,-h*0.6); ctx.lineTo(-w*0.27, h*0.52); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( w*0.27,-h*0.6); ctx.lineTo( w*0.27, h*0.52); ctx.stroke();
+  ctx.lineCap = "butt";
+  ctx.strokeStyle = "#ffd75e"; ctx.lineWidth = r*0.15;
+  ctx.beginPath(); ctx.moveTo(-w/2,-h*0.04); ctx.lineTo(w/2,-h*0.04); ctx.stroke();
+  /* замок */
+  ctx.fillStyle = "#ffe07a";
+  roundRect(-r*0.17,-h*0.16, r*0.34, r*0.36, 3); ctx.fill();
+  ctx.strokeStyle = "#8a5a12"; ctx.lineWidth = 1; ctx.stroke();
+  star4(-w*0.14,-h*0.34, r*0.2, 0.85);
+  star4( w*0.2, -h*0.16, r*0.12, 0.6);
+}
+/* ---- спрайты камней ----
+   Каждый камень — это два градиента, грани, блики и размытая тень. Считать это
+   заново по 12 раз в кадр незачем: вид камня не меняется, меняются только
+   положение, поворот и размер. Рисуем каждый тир один раз в offscreen-канву. */
+var SS = Math.max(1, Math.min(2, DPR * 1.35));   /* пикселей спрайта на игровую единицу */
+var SPRITE_PAD = 30;                             /* запас под тень и свечение бриллианта */
+var SPRITES = [];
+
+function renderSprite(tier, shape){
+  var d = GEMS[tier];
+  var box = (d.r + SPRITE_PAD) * 2;
+  var c = document.createElement("canvas");
+  c.width = c.height = Math.ceil(box * SS);
+  var g2 = c.getContext("2d");
+  g2.setTransform(SS, 0, 0, SS, box*SS/2, box*SS/2);
+  var keep = ctx;
+  ctx = g2;
+  ctx.shadowColor = "rgba(0,0,0,.5)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
+  if (d.chest) drawChest(d.r);
+  else if (tier === 1) drawPebble(d.r, shape);
+  else drawCut(tier, d.r);
+  ctx = keep;
+  return { cv: c, box: box };
+}
+function buildSprites(){
+  for (var i=0;i<GEMS.length;i++){
+    if (i === 1){
+      var arr = [];
+      for (var v=0; v<PEBBLE_VARIANTS; v++){
+        var sh = [];
+        for (var k=0;k<9;k++) sh.push(0.80 + Math.random()*0.30);
+        arr.push(renderSprite(1, sh));
+      }
+      SPRITES[1] = arr;
+    } else {
+      SPRITES[i] = renderSprite(i);
+    }
+  }
+}
+
+function drawGem(tier, x, y, r, angle, alpha, glow, variant){
+  var d = GEMS[tier];
+  var sp = (tier === 1) ? SPRITES[1][(variant||0) % PEBBLE_VARIANTS] : SPRITES[tier];
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = (alpha === undefined) ? 1 : alpha;
+  if (glow){
+    ctx.save(); ctx.globalAlpha *= glow*0.5;
+    var gg = ctx.createRadialGradient(0,0,r*0.4, 0,0,r*2.1);
+    gg.addColorStop(0, d.c1); gg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(0,0,r*2.1,0,6.283); ctx.fill();
+    ctx.restore();
+  }
+  if (angle) ctx.rotate(angle);
+  var w = sp.box * (r / d.r);
+  ctx.drawImage(sp.cv, -w/2, -w/2, w, w);
+  ctx.restore();
+}
+function drawGemObj(g){
+  var r = g.r, glow = 0;
+  if (g.state === "born"){
+    var p = Math.min(1, g.t/0.55);
+    var e = 1 + 2.2*Math.pow(1-p,3)*Math.sin(p*9);
+    r = g.r * (0.25 + 0.75*p) * (0.85 + 0.15*e);
+    glow = 1;
+    ctx.save();
+    ctx.globalAlpha = (1-p)*0.8;
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4*(1-p)+1;
+    ctx.beginPath(); ctx.arc(g.x, g.y, g.r*(0.6 + p*2.4), 0, 6.283); ctx.stroke();
+    ctx.restore();
+  } else if (g.state === "fly"){
+    glow = 1;
+  }
+  /* тень уже запечена в спрайт — здесь shadowBlur не нужен */
+  drawGem(g.tier, g.x, g.y, r, g.angle, 1, glow, g.variant);
+}
+
+/* ============== СЦЕНА ============== */
+var STARS = [];
+for (var si=0; si<70; si++) STARS.push({x:Math.random()*W, y:Math.random()*H, s:Math.random()*1.5+0.3, p:Math.random()*6.28});
+
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+var BG_GRAD = null;
+function drawBackground(){
+  if (!BG_GRAD){
+    BG_GRAD = ctx.createLinearGradient(0,0,0,H);
+    BG_GRAD.addColorStop(0,"#211a3d"); BG_GRAD.addColorStop(0.5,"#120e26"); BG_GRAD.addColorStop(1,"#080613");
+  }
+  ctx.fillStyle = BG_GRAD; ctx.fillRect(0,0,W,H);
+  for (var i=0;i<STARS.length;i++){
+    var s = STARS[i];
+    ctx.globalAlpha = 0.16 + 0.24*Math.abs(Math.sin(S.time*1.4 + s.p));
+    ctx.fillStyle = "#cfc4ff";
+    ctx.fillRect(s.x, s.y, s.s, s.s);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* Панель борда неизменна: градиент, сетка, виньетка, рамка. Печём один раз. */
+var BOARD_CV = null;
+function buildBoardSprite(){
+  var bw = BOARD.r - BOARD.l, bh = BOARD.b - BOARD.t;
+  var c = document.createElement("canvas");
+  c.width = Math.ceil(bw * DPR); c.height = Math.ceil(bh * DPR);
+  var g2 = c.getContext("2d");
+  g2.setTransform(DPR, 0, 0, DPR, -BOARD.l*DPR, -BOARD.t*DPR);
+  var keep = ctx; ctx = g2;
+  drawBoardRaw();
+  ctx = keep;
+  BOARD_CV = c;
+}
+function drawBoard(){
+  ctx.drawImage(BOARD_CV, BOARD.l, BOARD.t, BOARD.r-BOARD.l, BOARD.b-BOARD.t);
+}
+
+function drawBoardRaw(){
+  var bw = BOARD.r - BOARD.l, bh = BOARD.b - BOARD.t, x, y;
+  ctx.save();
+  roundRect(BOARD.l, BOARD.t, bw, bh, 14);
+  var g = ctx.createLinearGradient(0,BOARD.t,0,BOARD.b);
+  g.addColorStop(0,"rgba(90,70,160,.20)"); g.addColorStop(1,"rgba(20,14,45,.55)");
+  ctx.fillStyle = g; ctx.fill();
+  ctx.clip();
+  ctx.strokeStyle = "rgba(150,125,255,.07)"; ctx.lineWidth = 1;
+  for (x = BOARD.l; x <= BOARD.r; x += 40){ ctx.beginPath(); ctx.moveTo(x,BOARD.t); ctx.lineTo(x,BOARD.b); ctx.stroke(); }
+  for (y = BOARD.t; y <= BOARD.b; y += 40){ ctx.beginPath(); ctx.moveTo(BOARD.l,y); ctx.lineTo(BOARD.r,y); ctx.stroke(); }
+  var cy = (BOARD.t+BOARD.b)/2;
+  var vg = ctx.createRadialGradient(240,cy,bh*0.25, 240,cy,bh*0.75);
+  vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(1,"rgba(0,0,0,.45)");
+  ctx.fillStyle = vg; ctx.fillRect(BOARD.l,BOARD.t,bw,bh);
+  ctx.restore();
+  roundRect(BOARD.l, BOARD.t, bw, bh, 14);
+  ctx.strokeStyle = "rgba(180,160,255,.32)"; ctx.lineWidth = 2; ctx.stroke();
+}
+
+function drawDangerLine(){
+  /* насколько куча близко к черте — по этому же значению краснеет линия */
+  var near = 0, i;
+  for (i=0;i<S.gems.length;i++){
+    var g = S.gems[i];
+    if (g.state !== "live" || g.flying || g.tier === 0) continue;
+    /* тот же фильтр, что и в проверке проигрыша: летящий камень не повод тревожить */
+    if (Math.abs(g.vx) + Math.abs(g.vy) > 45) continue;
+    var k = (BOARD.b - (g.y - g.r)) / (BOARD.b - DANGER_Y);
+    if (k > near) near = k;
+  }
+  near = Math.max(0, Math.min(1, near));
+  var alarm = Math.max(0, (near - 0.72) / 0.28);
+  var puls = 0.5 + 0.5*Math.sin(S.time * (3 + alarm*9));
+  ctx.save();
+  ctx.setLineDash([9, 8]);
+  ctx.lineWidth = 1.5 + alarm*1.5;
+  ctx.strokeStyle = alarm > 0
+    ? "rgba(255," + Math.round(150 - alarm*110) + "," + Math.round(170 - alarm*120) + "," + (0.3 + 0.6*alarm*puls) + ")"
+    : "rgba(190,170,255,.22)";
+  ctx.beginPath();
+  ctx.moveTo(BOARD.l + 6, DANGER_Y); ctx.lineTo(BOARD.r - 6, DANGER_Y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (alarm > 0){
+    var gg = ctx.createLinearGradient(0, DANGER_Y, 0, DANGER_Y + 46);
+    gg.addColorStop(0, "rgba(255,60,90," + (0.16*alarm*puls) + ")");
+    gg.addColorStop(1, "rgba(255,60,90,0)");
+    ctx.fillStyle = gg;
+    ctx.fillRect(BOARD.l, DANGER_Y, BOARD.r-BOARD.l, 46);
+  }
+  ctx.restore();
+}
+
+function drawFloorRift(){
+  var pulse = 0.55 + 0.45*Math.abs(Math.sin(S.time*2.6));
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  var g = ctx.createLinearGradient(140,0,340,0);
+  g.addColorStop(0,"rgba(150,110,255,0)");
+  g.addColorStop(0.5,"rgba(180,150,255," + (0.55*pulse) + ")");
+  g.addColorStop(1,"rgba(150,110,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(140, BOARD.b-4, 200, 8);
+  var g2 = ctx.createRadialGradient(240,BOARD.b,4, 240,BOARD.b,70);
+  g2.addColorStop(0,"rgba(200,175,255," + (0.30*pulse) + ")");
+  g2.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.fillStyle = g2; ctx.beginPath(); ctx.arc(240,BOARD.b,70,0,6.283); ctx.fill();
+  ctx.restore();
+}
+
+function drawTray(){
+  ctx.save();
+  var g = ctx.createLinearGradient(0,BOARD.b,0,H);
+  g.addColorStop(0,"rgba(30,22,58,0)"); g.addColorStop(0.25,"rgba(26,19,50,.92)"); g.addColorStop(1,"rgba(12,8,26,1)");
+  ctx.fillStyle = g; ctx.fillRect(0, BOARD.b, W, H-BOARD.b);
+  ctx.translate(LAUNCH.x, LAUNCH.y);
+  var a = aimAngle();
+  ctx.save(); ctx.rotate(a);
+  ctx.fillStyle = "rgba(120,100,200,.30)";
+  roundRect(-9,-64,18,64,8); ctx.fill();
+  ctx.strokeStyle = "rgba(190,170,255,.35)"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.restore();
+  var p = ctx.createLinearGradient(0,-6,0,34);
+  p.addColorStop(0,"#4b3d84"); p.addColorStop(1,"#241a48");
+  ctx.fillStyle = p;
+  ctx.beginPath(); ctx.moveTo(-46,34); ctx.lineTo(-30,-2); ctx.lineTo(30,-2); ctx.lineTo(46,34); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = "rgba(190,170,255,.4)"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.restore();
+}
+
+function polyline(pts){
+  if (!pts.length) return;
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (var i=1;i<pts.length;i++) ctx.lineTo(pts[i][0], pts[i][1]);
+}
+function drawAimGuide(){
+  if (S.over || S.left <= 0) return;
+  var d = GEMS[S.queue[0]];
+  var mid = predict(0, 1, GUIDE_STEPS);
+  var lo  = predict(-JIT_ANG, 1 - JIT_SPD, GUIDE_STEPS);
+  var hi  = predict( JIT_ANG, 1 + JIT_SPD, GUIDE_STEPS);
+  if (!mid.length) return;
+  ctx.save();
+
+  /* заливка конуса разброса */
+  if (lo.length && hi.length){
+    ctx.beginPath();
+    ctx.moveTo(lo[0][0], lo[0][1]);
+    for (var i=1;i<lo.length;i++) ctx.lineTo(lo[i][0], lo[i][1]);
+    for (var j=hi.length-1;j>=0;j--) ctx.lineTo(hi[j][0], hi[j][1]);
+    ctx.closePath();
+    var end = mid[mid.length-1];
+    var gr = ctx.createLinearGradient(LAUNCH.x, BOARD.b, end[0], end[1]);
+    gr.addColorStop(0, "rgba(255,255,255,.16)");
+    gr.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = gr; ctx.fill();
+  }
+
+  /* пунктир по центру, гаснет к концу */
+  ctx.shadowColor = d.c1; ctx.shadowBlur = 6;
+  for (var k=0;k<mid.length;k+=2){
+    var t = k/mid.length;
+    ctx.globalAlpha = (1-t)*0.75;
+    ctx.fillStyle = d.c3;
+    ctx.beginPath(); ctx.arc(mid[k][0], mid[k][1], 2.8 - t*1.6, 0, 6.283); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawParts(){
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  for (var i=0;i<S.parts.length;i++){
+    var p = S.parts[i];
+    var t = 1 - p.life/p.max;
+    ctx.globalAlpha = t;
+    ctx.fillStyle = p.c;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.s*t, 0, 6.283); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawPops(){
+  ctx.save(); ctx.textAlign = "center";
+  for (var i=0;i<S.pops.length;i++){
+    var p = S.pops[i];
+    var t = p.life/p.max;
+    ctx.globalAlpha = t < 0.15 ? t/0.15 : (1-t)*1.15;
+    ctx.font = "700 " + p.size + "px \"Trebuchet MS\", system-ui, sans-serif";
+    ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.6)";
+    ctx.strokeText(p.text, p.x, p.y);
+    ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y);
+  }
+  ctx.restore();
+}
+
+function drawHud(){
+  ctx.save();
+  ctx.textBaseline = "alphabetic";
+  ctx.font = "600 11px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "rgba(190,175,255,.6)";
+  ctx.textAlign = "left";  ctx.fillText("ОЧКИ", 24, 24);
+  ctx.textAlign = "right"; ctx.fillText("КАМНИ", 456, 24);
+  ctx.font = "700 26px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "left";  ctx.fillText(String(S.score), 24, 47);
+  /* прибавка от сундука подсвечивается, чтобы её было видно на счётчике */
+  var fresh = S.chestFlash > 0;
+  ctx.fillStyle = fresh ? "#ffe07a" : (S.left <= 5 ? "#ff8a9a" : "#fff");
+  ctx.textAlign = "right"; ctx.fillText(String(S.left), 456, 47);
+
+  if (S.diamonds > 0){
+    ctx.textAlign = "center";
+    drawGem(TOP, 240, 32, 11, 0, 1, 0.6);
+    ctx.font = "700 15px \"Trebuchet MS\", system-ui, sans-serif";
+    ctx.fillStyle = "#eaf7ff";
+    ctx.fillText("x" + S.diamonds, 240, 52);
+  }
+
+  ctx.drawImage(LADDER_CV, LADDER_BOX.x, LADDER_BOX.y, LADDER_BOX.w, LADDER_BOX.h);
+  ctx.restore();
+}
+
+/* Лестница из семи камней тоже не меняется за партию — печём один раз. */
+var LADDER_CV = null;
+var LADDER_BOX = { x: 116, y: 46, w: 248, h: 48 };
+function drawLadderRaw(){
+  var rs = [6,7,8.5,10,11.5,13,15], gap = 13, i, total = gap*(TOP-1);
+  for (i=0;i<TOP;i++) total += rs[i]*2;
+  var x = 240 - total/2;
+  for (i=0;i<TOP;i++){
+    var r = rs[i], cx = x + r;
+    drawGem(i+1, cx, 70, r, 0, 0.95, 0);
+    if (i < TOP-1){
+      ctx.globalAlpha = 0.45; ctx.fillStyle = "#b9a6ff";
+      ctx.font = "600 11px system-ui, sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(">", cx + r + gap/2, 74); ctx.globalAlpha = 1;
+    }
+    x = cx + r + gap;
+  }
+}
+function buildLadderSprite(){
+  var b = LADDER_BOX;
+  var c = document.createElement("canvas");
+  c.width = Math.ceil(b.w * DPR); c.height = Math.ceil(b.h * DPR);
+  var g2 = c.getContext("2d");
+  g2.setTransform(DPR, 0, 0, DPR, -b.x*DPR, -b.y*DPR);
+  var keep = ctx; ctx = g2;
+  drawLadderRaw();
+  ctx = keep;
+  LADDER_CV = c;
+}
+
+function drawPreviews(){
+  ctx.save();
+  ctx.textAlign = "center";
+  if (S.left > 0 && !S.over){
+    var t = S.queue[0], d = GEMS[t];
+    var bob = Math.sin(S.time*3)*2;
+    drawGem(t, LAUNCH.x, LAUNCH.y - d.r*0.15 + bob, d.r, Math.sin(S.time*1.2)*0.12, 1, 0.35);
+  } else if (!S.over){
+    ctx.font = "600 13px \"Trebuchet MS\", system-ui, sans-serif";
+    ctx.fillStyle = "rgba(200,185,255,.6)";
+    ctx.fillText("камни закончились", LAUNCH.x, LAUNCH.y + 4);
+  }
+  ctx.font = "600 10px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "rgba(190,175,255,.55)";
+  ctx.fillText("СЛЕДУЮЩИЙ", 396, 706);
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = "rgba(180,160,255,.35)"; ctx.lineWidth = 1.2;
+  roundRect(360, 714, 72, 62, 12); ctx.stroke();
+  ctx.globalAlpha = 1;
+  var nt = S.queue[1];
+  drawGem(nt, 396, 745, Math.min(22, GEMS[nt].r), 0, 0.9, 0);
+
+  ctx.globalAlpha = 0.8;
+  ctx.strokeStyle = "rgba(180,160,255,.4)"; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.arc(BTN_SOUND.x, BTN_SOUND.y, BTN_SOUND.r, 0, 6.283); ctx.stroke();
+  ctx.font = "15px system-ui, sans-serif"; ctx.fillStyle = "#cfc0ff";
+  ctx.fillText(muted ? "OFF" : "ON", BTN_SOUND.x, BTN_SOUND.y + 5);
+
+  /* кнопка рекордов — три столбика пьедестала */
+  ctx.beginPath(); ctx.arc(BTN_REC.x, BTN_REC.y, BTN_REC.r, 0, 6.283); ctx.stroke();
+  ctx.fillStyle = "#ffd75e";
+  var bx = BTN_REC.x, by = BTN_REC.y + 7;
+  ctx.fillRect(bx - 9,   by - 6,  5, 6);
+  ctx.fillRect(bx - 2.5, by - 12, 5, 12);
+  ctx.fillRect(bx + 4,   by - 9,  5, 9);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+var BTN_SOUND = { x: 60, y: 745, r: 19 };
+var BTN_REC   = { x: 114, y: 745, r: 19 };
+var REC_PANEL = { x: 44, y: 130, w: 392, h: 516 };
+var REC_CLOSE = { x: 404, y: 160, r: 17 };
+
+function drawRecords(){
+  if (!showRecords) return;
+  var P = REC_PANEL, i;
+  ctx.save();
+  ctx.fillStyle = "rgba(6,4,16,.86)"; ctx.fillRect(0,0,W,H);
+
+  roundRect(P.x, P.y, P.w, P.h, 22);
+  var g = ctx.createLinearGradient(0, P.y, 0, P.y + P.h);
+  g.addColorStop(0, "#241b45"); g.addColorStop(1, "#140e2a");
+  ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = "rgba(180,160,255,.35)"; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.textAlign = "center";
+  ctx.font = "700 24px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "#fff"; ctx.fillText("Последние партии", 240, P.y + 46);
+
+  ctx.font = "600 12px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "rgba(190,175,255,.7)";
+  ctx.fillText(best > 0 ? "лучший результат: " + best : "рекордов пока нет", 240, P.y + 70);
+
+  if (!STORAGE_OK){
+    ctx.font = "600 11px \"Trebuchet MS\", system-ui, sans-serif";
+    ctx.fillStyle = "#ff9aa8";
+    ctx.fillText("браузер не даёт сохранять — список живёт до перезагрузки", 240, P.y + 88);
+  }
+
+  /* крестик */
+  ctx.beginPath(); ctx.arc(REC_CLOSE.x, REC_CLOSE.y, REC_CLOSE.r, 0, 6.283);
+  ctx.strokeStyle = "rgba(180,160,255,.45)"; ctx.lineWidth = 1.4; ctx.stroke();
+  ctx.strokeStyle = "#cfc0ff"; ctx.lineWidth = 2;
+  var q = 5.5;
+  ctx.beginPath();
+  ctx.moveTo(REC_CLOSE.x-q, REC_CLOSE.y-q); ctx.lineTo(REC_CLOSE.x+q, REC_CLOSE.y+q);
+  ctx.moveTo(REC_CLOSE.x+q, REC_CLOSE.y-q); ctx.lineTo(REC_CLOSE.x-q, REC_CLOSE.y+q);
+  ctx.stroke();
+
+  if (!hist.length){
+    ctx.font = "600 14px \"Trebuchet MS\", system-ui, sans-serif";
+    ctx.fillStyle = "rgba(190,175,255,.55)";
+    ctx.fillText("Сыграйте партию — она появится здесь", 240, P.y + 250);
+    ctx.restore();
+    return;
+  }
+
+  /* шапка таблицы */
+  /* при предупреждении о хранилище таблицу сдвигаем ниже, чтобы не наехала на шапку */
+  var top = P.y + (STORAGE_OK ? 100 : 116), rowH = 39;
+  ctx.font = "600 10px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "rgba(190,175,255,.45)";
+  ctx.textAlign = "left";  ctx.fillText("КОГДА", 74, top - 10);
+  ctx.textAlign = "right"; ctx.fillText("ОЧКИ", 406, top - 10);
+
+  var topScore = 0;
+  for (i=0;i<hist.length;i++) if (hist[i].s > topScore) topScore = hist[i].s;
+
+  for (i=0;i<hist.length;i++){
+    var r = hist[i], y = top + i*rowH, isBest = (r.s === topScore && r.s > 0);
+    if (isBest){
+      roundRect(P.x+14, y+2, P.w-28, rowH-6, 9);
+      ctx.fillStyle = "rgba(255,215,94,.10)"; ctx.fill();
+      ctx.strokeStyle = "rgba(255,215,94,.35)"; ctx.lineWidth = 1; ctx.stroke();
+    }
+    ctx.textAlign = "left";
+    ctx.font = "700 13px \"Trebuchet MS\", system-ui, sans-serif";
+    ctx.fillStyle = isBest ? "#ffe07a" : "rgba(210,198,255,.85)";
+    ctx.fillText(fmtDate(r.t), 74, y + 24);
+
+    ctx.font = "600 11px \"Trebuchet MS\", system-ui, sans-serif";
+    ctx.fillStyle = "rgba(190,175,255,.55)";
+    ctx.fillText(r.n + " камней", 152, y + 24);
+
+    drawGem(TOP, 258, y + 19, 9, 0, 0.95, 0);
+    ctx.font = "700 12px \"Trebuchet MS\", system-ui, sans-serif";
+    ctx.fillStyle = "#eaf7ff"; ctx.fillText("x" + r.d, 270, y + 24);
+
+    drawGem(0, 306, y + 19, 9, 0, 0.95, 0);
+    ctx.fillStyle = "#ffe9a8"; ctx.fillText("x" + (r.c || 0), 318, y + 24);
+
+    ctx.textAlign = "right";
+    ctx.font = "700 19px \"Trebuchet MS\", system-ui, sans-serif";
+    ctx.fillStyle = isBest ? "#ffe07a" : "#fff";
+    ctx.fillText(String(r.s), 406, y + 25);
+  }
+  ctx.restore();
+}
+
+var BTN = { x: 140, y: 486, w: 200, h: 54 };
+function drawOverlay(){
+  if (!S.over) return;
+  ctx.save();
+  ctx.fillStyle = "rgba(6,4,16,.82)"; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = "center";
+  ctx.font = "700 34px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "#fff"; ctx.fillText("Игра окончена", 240, 252);
+  ctx.font = "600 13px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = S.reason === "борд переполнен" ? "#ff8a9a" : "rgba(190,175,255,.7)";
+  ctx.fillText(S.reason, 240, 274);
+
+  ctx.font = "600 12px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "rgba(190,175,255,.65)"; ctx.fillText("ВАШ РЕЗУЛЬТАТ", 240, 306);
+  ctx.font = "700 58px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "#ffe9a8"; ctx.fillText(String(S.score), 240, 360);
+
+  drawGem(TOP, 158, 408, 20, 0, 1, 0.5);
+  ctx.font = "700 22px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "#eaf7ff"; ctx.textAlign = "left";
+  ctx.fillText("x " + S.diamonds, 184, 416);
+  drawGem(0, 278, 408, 18, 0, 1, 0.45);
+  ctx.fillStyle = "#ffe9a8";
+  ctx.fillText("x " + S.chests, 304, 416);
+
+  ctx.textAlign = "center";
+  ctx.font = "600 13px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = (S.score >= best && S.score > 0) ? "#9dffcf" : "rgba(190,175,255,.6)";
+  ctx.fillText((S.score >= best && S.score > 0) ? "НОВЫЙ РЕКОРД!" : "рекорд: " + best, 240, 452);
+
+  var hot = Math.sin(S.time*3)*0.5+0.5;
+  roundRect(BTN.x, BTN.y, BTN.w, BTN.h, 27);
+  var g = ctx.createLinearGradient(0,BTN.y,0,BTN.y+BTN.h);
+  g.addColorStop(0,"#8f6bff"); g.addColorStop(1,"#5a34c9");
+  ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255," + (0.3+0.3*hot) + ")"; ctx.lineWidth = 2; ctx.stroke();
+  ctx.font = "700 19px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.fillStyle = "#fff"; ctx.fillText("Играть снова", 240, BTN.y + 35);
+  ctx.restore();
+}
+
+/* ============== ЦИКЛ ============== */
+var acc = 0, prev = performance.now();
+function frame(now){
+  var dt = (now - prev)/1000; prev = now;
+  if (dt > 0.1) dt = 0.1;
+  if (dt < 0) dt = 0;                 /* часы назад не идут: иначе аккумулятор ухнет в минус и физика встанет намертво */
+  S.time += dt;
+
+  if (!S.over){
+    acc += dt;
+    var step = 1/120, n = 0;
+    while (acc >= step && n < 8){ physics(step); acc -= step; n++; }
+    if (acc > step || acc < 0) acc = 0;
+  }
+  updateFx(dt);
+  S.shake *= 0.86;
+  S.chestFlash = Math.max(0, S.chestFlash - dt);
+  S.flash *= 0.90;
+
+  /* переполнение: улёгшийся камень торчит над чертой дольше DANGER_HOLD.
+     Летящие и подпрыгнувшие не считаются — иначе выстрел вверх убивал бы партию. */
+  if (!S.over){
+    var above = false, i, g;
+    for (i=0;i<S.gems.length;i++){
+      g = S.gems[i];
+      if (g.state !== "live" || g.flying || g.tier === 0) continue;
+      if (Math.abs(g.vx) + Math.abs(g.vy) > 45) continue;
+      if (g.y - g.r < DANGER_Y){ above = true; break; }
+    }
+    S.danger = above ? S.danger + dt : 0;
+    if (S.danger > DANGER_HOLD) endGame("борд переполнен");
+  }
+
+  /* камни закончились — ждём, пока куча уляжется, и подводим итог */
+  /* Камни кончились — ждём, пока куча уляжется, и подводим итог.
+     Ждём не бесконечно: что бы ни случилось с физикой, экран итогов
+     обязан появиться, иначе игрок застревает без кнопки рестарта. */
+  if (!S.over && S.left <= 0){
+    var busy = false;
+    for (var k=0;k<S.gems.length;k++){
+      var q = S.gems[k];
+      if (q.state !== "live" || Math.abs(q.vx)+Math.abs(q.vy) > 30){ busy = true; break; }
+    }
+    S.settle = busy ? 0 : S.settle + dt;
+    S.endWait += dt;
+    if (S.settle > 1.0 || S.endWait > 4.0) endGame("камни закончились");
+  } else {
+    S.settle = 0; S.endWait = 0;      /* сундук вернул камни — партия продолжается */
+  }
+
+  ctx.clearRect(0,0,W,H);
+  drawBackground();
+
+  ctx.save();
+  if (S.shake > 0.4) ctx.translate((Math.random()-0.5)*S.shake, (Math.random()-0.5)*S.shake);
+  drawBoard();
+  drawDangerLine();
+  drawAimGuide();
+  drawTray();
+  drawPreviews();
+  for (var j=0;j<S.gems.length;j++) if (S.gems[j].state !== "fly") drawGemObj(S.gems[j]);
+  drawParts();
+  drawPops();
+  ctx.restore();
+
+  drawFloorRift();
+  drawHud();
+  for (var k=0;k<S.gems.length;k++) if (S.gems[k].state === "fly") drawGemObj(S.gems[k]);
+
+  if (S.flash > 0.02){
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = "rgba(190,230,255," + (S.flash*0.35) + ")";
+    ctx.fillRect(0,0,W,H); ctx.restore();
+  }
+  drawOverlay();
+  drawRecords();
+  requestAnimationFrame(frame);
+}
+
+function endGame(reason){
+  S.over = true;
+  S.reason = reason || "";
+  pushHistory();
+  if (S.score > best){
+    best = S.score;
+    storeSet("gemMergeBest", String(best));
+  }
+  sfxOver();
+}
+
+/* ============== ВВОД ============== */
+function toLocal(e){
+  var r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * (W / r.width),
+           y: (e.clientY - r.top)  * (H / r.height) };
+}
+cv.addEventListener("pointermove", function(e){
+  if (e.pointerType === "touch" && !aiming) return;   /* палец не «водит» мышью просто так */
+  var p = toLocal(e); S.aim.x = p.x; S.aim.y = p.y;
+});
+function near(p, b, pad){
+  var dx = p.x - b.x, dy = p.y - b.y, r = b.r + (pad || 5);
+  return dx*dx + dy*dy < r*r;
+}
+
+/* На мыши курсор целится сам, поэтому клик = выстрел.
+   На тач-экране целиться нечем: ведёшь пальцем — прицел едет за ним,
+   отпускаешь — выстрел. Иначе на телефоне пришлось бы стрелять вслепую. */
+var aiming = false;
+cv.addEventListener("pointerup", function(e){
+  if (!aiming) return;
+  aiming = false;
+  var p = toLocal(e); S.aim.x = p.x; S.aim.y = p.y;
+  fire();
+});
+cv.addEventListener("pointercancel", function(){ aiming = false; });
+cv.addEventListener("pointerleave", function(){ aiming = false; });
+
+cv.addEventListener("pointerdown", function(e){
+  e.preventDefault();
+  var p = toLocal(e);
+
+  /* пока открыты рекорды — игра ввод не получает */
+  if (showRecords){
+    var P = REC_PANEL;
+    if (near(p, REC_CLOSE, 9) ||
+        p.x < P.x || p.x > P.x + P.w || p.y < P.y || p.y > P.y + P.h){
+      showRecords = false;
+      tone(300, 0.08, "sine", 0.06);
+    }
+    return;
+  }
+
+  S.aim.x = p.x; S.aim.y = p.y;
+  if (near(p, BTN_SOUND)){
+    muted = !muted;
+    if (!muted) tone(660, 0.12, "sine", 0.1);
+    return;
+  }
+  if (near(p, BTN_REC)){
+    showRecords = true;
+    tone(520, 0.10, "sine", 0.07);
+    return;
+  }
+  if (S.over){
+    if (p.x > BTN.x && p.x < BTN.x+BTN.w && p.y > BTN.y && p.y < BTN.y+BTN.h){
+      reset(); tone(520,0.12,"triangle",0.1); tone(780,0.16,"sine",0.08,0.07);
+    }
+    return;
+  }
+  if (e.pointerType === "touch") aiming = true;   /* выстрел произойдёт на отпускании */
+  else fire();
+});
+window.addEventListener("keydown", function(e){
+  if (showRecords){
+    if (e.code === "Escape" || e.code === "KeyT" || e.code === "Space"){ e.preventDefault(); showRecords = false; }
+    return;
+  }
+  if (e.code === "Space"){ e.preventDefault(); if (S.over) reset(); else fire(); }
+  if (e.code === "KeyR") reset();
+  if (e.code === "KeyM") muted = !muted;
+  if (e.code === "KeyT") showRecords = true;
+});
+window.addEventListener("contextmenu", function(e){ e.preventDefault(); });
+
+/* Офлайн-режим. Service worker живёт только на http(s); при открытии файла
+   напрямую (file://) его нет — игра просто работает без кэша. */
+if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0){
+  window.addEventListener("load", function(){
+    navigator.serviceWorker.register("sw.js").catch(function(){});
+  });
+}
+
+buildSprites();
+buildBoardSprite();
+buildLadderSprite();
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

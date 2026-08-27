@@ -1,0 +1,20 @@
+{
+  "name": "gems-merge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Самоцветы — слияние камней",
+  "scripts": {
+    "serve": "python -m http.server 8080 --bind 0.0.0.0",
+    "www": "node build-www.js",
+    "android:add": "npm run www && npx cap add android",
+    "android:sync": "npm run www && npx cap sync android",
+    "android:apk": "npm run www && npx cap sync android && cd android && gradlew.bat assembleDebug"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/android": "^6.1.2"
+  }
+}
