@@ -3,6 +3,10 @@ node_modules/
 android/
 www/
 
+# исходники картинок: в игре — уменьшенные копии в img/ и scene/background.jpg
+fruits/
+scene/background.png
+
 # служебное
 .DS_Store
 Thumbs.db

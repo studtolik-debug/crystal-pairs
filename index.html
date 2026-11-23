@@ -34,22 +34,38 @@
 var W = 480, H = 800;
 var GRAV = 1500;
 
-/* Кувшин. Внутренний профиль задан парами [y, полуширина] и сглажен сплайном:
-   горлышко чуть уже края, ниже — пузатое брюхо, у дна скруглённые углы. */
-var CX = 234;
-var PROFILE = [[206,150],[240,143],[292,158],[382,184],[480,196],[575,190],[642,172],[677,150],[692,126],[698,104]];
-var RIM_Y = 206, RIM_HW = 150, NECK_HW = 143, BOTTOM_Y = 698;
-var GLASS_T = 9;                    /* толщина стекла кувшина */
+/* Кувшин нарисован картинками scene/jug-back.png (за фруктами) и
+   scene/jug-front.png (поверх них). JUG_K — игровых единиц на пиксель
+   картинки; задний слой стоит центром (JUG_BX по картинке) на CX, верхом —
+   на JUG_Y0, а дном — на барной стойке фона. Передний слой на 0.5% крупнее
+   и сдвинут на (1, 4) пикселя: так оба совпадают по контуру. */
+var CX = 230;
+var JUG_K = 0.62, JUG_Y0 = 219, JUG_BX = 330.5;
+var FRONT_S = 1.005, FRONT_DX = 1, FRONT_DY = 4;
+
+/* Внутренний профиль [y, полуширина] снят с картинки: внешний край стекла
+   по прозрачности минус 12 пикселей толщины стенки, через каждые 20 пикселей,
+   переведён в игровые координаты. Дно — там, где фрукты встают на толстое
+   стеклянное донце. Дальше профиль сглаживается сплайном. */
+var PROFILE = [[238,136],[250,132.4],[262,128],[275,126.5],[287,128.7],[300,133],[312,138.9],
+  [324,144.8],[337,151.3],[349,157.5],[362,163.1],[374,168.9],[386,173.9],[399,178.3],[411,182.3],
+  [424,186],[436,189.4],[448,191.9],[461,194.1],[473,195.3],[486,196.2],[498,196.8],[510,196.8],
+  [523,196.5],[535,195.6],[548,193.8],[560,191.9],[572,189.1],[585,185.1],[597,181],[610,176.4],
+  [622,170.5],[634,164.3],[647,157.2],[659,149.1],[672,139.8],[684,129.3],[696,117.5]];
+var RIM_Y = 238, RIM_HW = 136, NECK_HW = 126.5, BOTTOM_Y = 696;
+var GLASS_T = 9;                    /* толщина стекла — для запасного кувшина, нарисованного кодом */
 
 /* Фрукт висит на прищепке под перекладиной и падает по клику.
-   Перекладина высоко, чтобы даже апельсин целиком висел над краем кувшина. */
-var RAIL_Y = 88;
+   Перекладина сразу под гирляндой фона, чтобы даже апельсин целиком
+   висел над краем кувшина. */
+var RAIL_Y = 96;
 var DROP_CD = 0.5;                  /* сек. до появления следующего фрукта */
-function hoverY(r){ return RAIL_Y + 12 + r; }
+/* нитка привязана к кончику хвостика, а не к макушке тела */
+function hoverY(t){ return RAIL_Y + 12 - SHAPES[t].hy; }
 
-/* Баланс подобран прогоном ботов: при 120 фруктах и таком размере плодов
-   бот, бросающий наугад, примерно в каждой четвёртой партии переполняет кувшин,
-   а в остальных доводит кучу почти до горлышка. */
+/* Баланс подобран прогоном ботов: при 120 фруктах бот, бросающий наугад,
+   переполняет кувшин в 4–5 партиях из 5 (в среднем к 90-му броску),
+   а бот, целящийся в такой же фрукт, — примерно в половине партий. */
 var BASE_DROPS = 120;
 
 /* Ящик с фруктами выпадает при слиянии. Слияний примерно MERGE_RATE на бросок,
@@ -61,24 +77,95 @@ var CRATE_BONUS = 10;
 var CRATE_SCORE = 150;
 
 /* второй, аварийный конец — фрукты доросли до горлышка */
-var DANGER_Y = 250;
+var DANGER_Y = 282;                 /* чуть ниже самого узкого места горлышка */
 var DANGER_HOLD = 1.6;              /* сек. над чертой, прежде чем засчитать переполнение */
 
-/* c — цвет стекла, d — тёмный край, l — светлая сердцевина */
+/* c — цвет стекла, d — тёмный край, l — светлая сердцевина.
+   Размеры уменьшены на 6% под кувшин с картинки: он вмещает на 10% меньше
+   прежнего, и с прежними фруктами переполнялся заметно раньше. */
 var FRUITS = [
-  { name:"Ящик",     r:30, c:[255,200,90],  d:[120,70,20],  l:[255,240,190], crate:true },
-  { name:"Вишня",    r:23, c:[236,28,64],   d:[110,0,28],   l:[255,170,190] },
-  { name:"Клубника", r:30, c:[255,58,78],   d:[140,10,30],  l:[255,195,205] },
-  { name:"Лайм",     r:38, c:[140,226,60],  d:[38,108,18],  l:[225,255,185] },
-  { name:"Апельсин", r:48, c:[255,150,30],  d:[168,66,0],   l:[255,228,165] },
-  { name:"Драгонфрукт", r:58, c:[255,62,150], d:[150,0,80], l:[255,200,232] },
-  { name:"Ананас",   r:71, c:[255,192,58],  d:[150,92,8],   l:[255,242,195] },
-  { name:"Арбуз",    r:89, c:[72,192,82],   d:[14,78,28],   l:[205,255,205] }
+  { name:"Ящик",     r:30,   c:[255,200,90],  d:[120,70,20],  l:[255,240,190], crate:true },
+  { name:"Вишня",    r:21.5, c:[236,28,64],   d:[110,0,28],   l:[255,170,190] },
+  { name:"Клубника", r:28,   c:[255,58,78],   d:[140,10,30],  l:[255,195,205] },
+  { name:"Лайм",     r:35.5, c:[140,226,60],  d:[38,108,18],  l:[225,255,185] },
+  { name:"Апельсин", r:45,   c:[255,150,30],  d:[168,66,0],   l:[255,228,165] },
+  { name:"Драгонфрукт", r:54.5, c:[255,62,150], d:[150,0,80], l:[255,200,232] },
+  { name:"Ананас",   r:66.5, c:[255,192,58],  d:[150,92,8],   l:[255,242,195] },
+  { name:"Арбуз",    r:83.5, c:[72,192,82],   d:[14,78,28],   l:[205,255,205] }
 ];
 var TOP = 7;                        /* арбуз — самый крупный; два арбуза разбиваются насовсем */
 var SCORES = [0, 0, 10, 25, 60, 140, 320, 1500];
 var JACKPOT = 3000;
 var POOL   = [1,1,1,2,2,3,3,4];     /* сверху падают только первые 4 */
+
+/* Картинки фруктов и границы их тел.
+   Всё в пикселях исходной картинки (ow x oh); файлы в img/ — её уменьшенные
+   копии, пропорции те же. Тело: эллипсы ["e", cx, cy, a, b, поворот°] и круги
+   ["c", cx, cy, r], обведённые по маске прозрачности. Хвостики, листья и
+   кончики кроны в тело не входят — они не толкаются.
+   unit — сколько пикселей картинки соответствует FRUITS[t].r: площадь тела
+   остаётся прежней, баланс не плывёт. */
+var ART = [
+  null,
+  { src:"img/cherry.png",     ow:1275, oh:1632, unit:564, hook:[960,18], body:[["e",587,1085,590,540,0]] },
+  { src:"img/strawberry.png", ow:1302, oh:1635, unit:580, hook:[978,18], body:[["c",631,920,560],["c",610,1230,400],["c",560,1450,190]] },
+  { src:"img/lime.png",       ow:1538, oh:1719, unit:721, hook:[1218,18], body:[["e",714,995,735,707,-76.8]] },
+  { src:"img/orange.png",     ow:1539, oh:1722, unit:727, hook:[1218,18], body:[["e",723,999,734,721,-85]] },
+  { src:"img/dragon.png",     ow:1323, oh:1709, unit:613, hook:[1143,18], body:[["e",669,988,714,527,-65.5]] },
+  { src:"img/pineapple.png",  ow:943,  oh:1803, unit:457, hook:[464,20], body:[["e",454,1330,444,470,0],["c",455,640,230]] },
+  { src:"img/watermelon.png", ow:1521, oh:1712, unit:747, hook:[1250,16], body:[["e",757,977,763,732,9.4]] }
+];
+
+/* Эллипс -> цепочка кругов вдоль большой оси. Радиус каждого — вписанный
+   в эллипс в этой точке, крайние касаются вершин, так что цепочка повторяет
+   овал почти без зазоров. Почти круглый эллипс — один круг той же площади. */
+function ellipseCircles(cx, cy, a, b, deg, out){
+  if (a < b){ var t = a; a = b; b = t; deg += 90; }
+  if (a/b < 1.06){ out.push([cx, cy, Math.sqrt(a*b)]); return; }
+  var th = deg*Math.PI/180, ux = Math.cos(th), uy = Math.sin(th);
+  var n = a/b < 1.2 ? 3 : 5, c2 = a*a - b*b, tmax = c2/a;
+  for (var i=0;i<n;i++){
+    var s = -tmax + 2*tmax*i/(n-1);
+    out.push([cx + ux*s, cy + uy*s, b*Math.sqrt(Math.max(0, 1 - s*s/c2))]);
+  }
+}
+
+/* SHAPES[t]: круги тела в игровых единицах относительно центра масс,
+   момент инерции на единицу массы и габариты в покое (угол 0). */
+var SHAPES = [];
+(function(){
+  for (var t=0;t<FRUITS.length;t++){
+    var art = ART[t], r = FRUITS[t].r, cs = [], i;
+    if (!art) cs.push([0, 0, r]);
+    else {
+      var px = [], k = r/art.unit;
+      for (i=0;i<art.body.length;i++){
+        var p = art.body[i];
+        if (p[0] === "c") px.push([p[1], p[2], p[3]]);
+        else ellipseCircles(p[1], p[2], p[3], p[4], p[5], px);
+      }
+      for (i=0;i<px.length;i++) cs.push([px[i][0]*k, px[i][1]*k, px[i][2]*k]);
+    }
+    /* центр масс — среднее центров с весом по площади круга */
+    var sw = 0, mx = 0, my = 0;
+    for (i=0;i<cs.length;i++){ var w = cs[i][2]*cs[i][2]; sw += w; mx += cs[i][0]*w; my += cs[i][1]*w; }
+    mx /= sw; my /= sw;
+    var R = 0, k2 = 0, top = 0, bot = 0, hw = 0;
+    for (i=0;i<cs.length;i++){
+      var c = cs[i]; c[0] -= mx; c[1] -= my;
+      var d = Math.sqrt(c[0]*c[0] + c[1]*c[1]);
+      R = Math.max(R, d + c[2]);
+      k2 += c[2]*c[2] * (c[2]*c[2]/2 + d*d);
+      top = Math.max(top, c[2] - c[1]); bot = Math.max(bot, c[1] + c[2]); hw = Math.max(hw, Math.abs(c[0]) + c[2]);
+    }
+    SHAPES[t] = { c: cs, R: R, k2: k2/sw, top: top, bot: bot, hw: hw,
+                  /* где центр масс на картинке — в игровых единицах от её левого верхнего угла */
+                  ix: art ? mx : 0, iy: art ? my : 0,
+                  iw: art ? art.ow*r/art.unit : 0, ih: art ? art.oh*r/art.unit : 0,
+                  /* кончик хвостика — за него фрукт висит на нитке */
+                  hx: art ? art.hook[0]*r/art.unit - mx : 0, hy: art ? art.hook[1]*r/art.unit - my : -r };
+  }
+})();
 
 /* ============== CANVAS ============== */
 var cv = document.getElementById("game");
@@ -262,9 +349,9 @@ var S;
 function pick(){ return POOL[(Math.random()*POOL.length)|0]; }
 function reset(){
   S = {
-    gems: [], parts: [], shards: [], rings: [], pops: [],
+    gems: [], parts: [], shards: [], rings: [], pops: [], flyers: [], cocktailBump: 0,
     queue: [pick(), pick()],
-    drops: 0, left: BASE_DROPS, score: 0, melons: 0, jackpots: 0, crates: 0, merges: 0,
+    drops: 0, left: BASE_DROPS, score: 0, cocktails: 0, jackpots: 0, crates: 0, merges: 0,
     over: false, reason: "", danger: 0, settle: 0, endWait: 0, shake: 0, crateFlash: 0,
     aimX: CX, cool: 0,
     time: 0, flash: 0
@@ -296,7 +383,7 @@ try {
 } catch(e){ hist = []; }
 
 function pushHistory(){
-  hist.unshift({ s:S.score, d:S.melons, c:S.crates, n:S.drops, t:Date.now() });
+  hist.unshift({ s:S.score, d:S.cocktails, c:S.crates, n:S.drops, t:Date.now() });
   if (hist.length > HIST_MAX) hist.length = HIST_MAX;
   storeSet(HIST_KEY, JSON.stringify(hist));
 }
@@ -312,25 +399,47 @@ function fmtDate(ts){
 }
 
 function makeFruit(tier, x, y){
-  var d = FRUITS[tier];
-  return { tier:tier, x:x, y:y, vx:0, vy:0, r:d.r, m:d.r*d.r,
-           angle: (Math.random()-0.5)*0.6, spin:0, bx:x,
-           dead:false, state:"live", t:0, pop:1 };
+  var d = FRUITS[tier], sh = SHAPES[tier], m = d.r*d.r;
+  var g = { tier:tier, x:x, y:y, vx:0, vy:0, r:d.r, m:m, im:1/m, iI:1/(m*sh.k2),
+            angle: (Math.random()-0.5)*0.6, spin:0,
+            dead:false, state:"live", t:0, pop:1, px:x, py:y, pa:0, rs:999,
+            sc:1, wc:new Float64Array(sh.c.length*3) };
+  pose(g);
+  return g;
+}
+
+/* Круги тела в мире: поворот и масштаб (новый фрукт «выдувается» и растёт) */
+function pose(g){
+  var cs = SHAPES[g.tier].c, w = g.wc, s = g.sc;
+  var ca = Math.cos(g.angle)*s, sa = Math.sin(g.angle)*s;
+  for (var i=0, j=0; i<cs.length; i++, j+=3){
+    var c = cs[i];
+    w[j]   = g.x + ca*c[0] - sa*c[1];
+    w[j+1] = g.y + sa*c[0] + ca*c[1];
+    w[j+2] = c[2]*s;
+  }
+}
+/* верхняя точка тела — по ней судим о переполнении */
+function topOf(g){
+  var w = g.wc, t = 1e9;
+  for (var j=0;j<w.length;j+=3) if (w[j+1] - w[j+2] < t) t = w[j+1] - w[j+2];
+  return t;
 }
 
 /* ============== БРОСОК ============== */
-function dropX(r){
-  var lim = NECK_HW - r - 3;
+function dropX(tier){
+  var lim = NECK_HW - SHAPES[tier].hw - 3;
   return Math.max(CX - lim, Math.min(CX + lim, S.aimX));
 }
 function fire(){
   if (S.over || S.left <= 0 || S.cool > 0) return;
   var tier = S.queue.shift();
   S.queue.push(pick());
-  var g = makeFruit(tier, dropX(FRUITS[tier].r), hoverY(FRUITS[tier].r));
+  var g = makeFruit(tier, dropX(tier), hoverY(tier));
   g.vy = 40;
   g.angle = Math.sin(S.time*2.2)*0.12;
   g.spin = (Math.random()-0.5)*1.2;
+  pose(g);
   S.gems.push(g);
   S.drops++;
   S.left--;
@@ -338,100 +447,235 @@ function fire(){
   sfxDrop();
 }
 
-/* ============== ФИЗИКА ============== */
-function walls(g){
-  for (var i=0;i<SEGS.length;i++){
-    var s = SEGS[i];
-    if (g.y + g.r < s.y0 || g.y - g.r > s.y1 || g.x + g.r < s.x0 || g.x - g.r > s.x1) continue;
-    var px = g.x - s.ax, py = g.y - s.ay;
-    var t = (px*s.dx + py*s.dy) / s.l2;
-    var inner = t > 0 && t < 1;
-    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-    var ex = g.x - (s.ax + s.dx*t), ey = g.y - (s.ay + s.dy*t);
-    var d = Math.sqrt(ex*ex + ey*ey);
-    if (d >= g.r) continue;
-    var nx, ny, pen;
-    /* центр проскочил за стенку — выталкиваем по нормали отрезка.
-       Только для середины отрезка: у концов «сзади» бывает и законно внутри. */
-    if (inner && ex*s.nx + ey*s.ny < 0){ nx = s.nx; ny = s.ny; pen = g.r + d; }
-    else if (d < 1e-6){ nx = s.nx; ny = s.ny; pen = g.r; }
-    else { nx = ex/d; ny = ey/d; pen = g.r - d; }
-    g.x += nx*pen; g.y += ny*pen;
-    var vn = g.vx*nx + g.vy*ny;
-    g.touch = true;
-    if (vn < 0){
-      if (-vn > 260) clink(-vn);
-      g.vx -= 1.3*vn*nx; g.vy -= 1.3*vn*ny;
-      var tx = -ny, ty = nx, vt = g.vx*tx + g.vy*ty;
-      g.vx -= vt*0.04*tx; g.vy -= vt*0.04*ty;
+/* ============== ФИЗИКА ==============
+   Фрукт — твёрдое тело из нескольких кругов: овальный и вытянутый лежат,
+   катятся и переворачиваются по своей форме, а не как шар.
+
+   Шаг устроен «по позициям»: сначала двигаем тела, потом расталкиваем
+   пересечения, сдвигая и поворачивая их, и только потом берём скорость
+   из фактического сдвига. Поэтому зажатый в куче фрукт стоит со скоростью
+   ноль — раньше гравитация копила ему скорость, расталкивание возвращало
+   его на место, и он считался «летящим» и мог крутиться без конца.
+   Трение покоя держит фрукт на склоне, трение скольжения заставляет
+   катиться; отскок — небольшой, стекло о стекло. */
+/* Трение подобрано ботами: при 0.35 куча не утрамбовывалась, и кувшин
+   переполнялся заметно раньше, чем с прежними круглыми фруктами. */
+var MU_S = 0.15, MU_D = 0.08;        /* трение покоя и скольжения между фруктами */
+var MU_WALL = 0.18;                  /* стенки кувшина гладкие */
+var E_FRUIT = 0.15, E_WALL = 0.3;    /* упругость удара */
+var VMAX = 1600, WMAX = 14;          /* потолки скорости и вращения: страховка от рывков */
+var CONTACTS = [], NC = 0;
+
+function newContact(){
+  if (NC >= CONTACTS.length) CONTACTS.push({});
+  return CONTACTS[NC++];
+}
+/* скорость точки тела, отстоящей от центра на (rx, ry) */
+function pvx(g, ry){ return g.vx - g.spin*ry; }
+function pvy(g, rx){ return g.vy + g.spin*rx; }
+
+/* Ищем пары кругов, которые касаются или вот-вот коснутся. Список живёт
+   один шаг: на нём делаем все итерации расталкивания и затем трение. */
+function findContacts(dt){
+  NC = 0;
+  var gs = S.gems, n = gs.length, i, j, p, q, s, k;
+  for (i=0;i<n;i++){
+    var a = gs[i];
+    if (a.state !== "live" || a.dead) continue;
+    var A = a.wc, Ra = SHAPES[a.tier].R*a.sc;
+    for (j=i+1;j<n;j++){
+      var b = gs[j];
+      if (b.state !== "live" || b.dead) continue;
+      var dx = b.x - a.x, dy = b.y - a.y, RR = Ra + SHAPES[b.tier].R*b.sc + 2;
+      if (dx*dx + dy*dy > RR*RR) continue;
+      var B = b.wc;
+      for (p=0;p<A.length;p+=3) for (q=0;q<B.length;q+=3){
+        var ex = B[q] - A[p], ey = B[q+1] - A[p+1], rr = A[p+2] + B[q+2] + 1;
+        var e2 = ex*ex + ey*ey;
+        if (e2 >= rr*rr || e2 < 1e-9) continue;
+        var e = Math.sqrt(e2), nx = ex/e, ny = ey/e;
+        var cx = A[p] + nx*A[p+2], cy = A[p+1] + ny*A[p+2];
+        k = newContact();
+        k.a = a; k.b = b; k.p = p; k.q = q; k.seg = null; k.ln = 0;
+        k.nx = nx; k.ny = ny; k.cx = cx; k.cy = cy;
+        /* нормальная скорость сближения до расталкивания — для отскока */
+        k.vn0 = (pvx(b, cy - b.y) - pvx(a, cy - a.y))*nx + (pvy(b, cx - b.x) - pvy(a, cx - a.x))*ny;
+      }
+    }
+    /* стенки */
+    for (p=0;p<A.length;p+=3){
+      var X = A[p], Y = A[p+1], r1 = A[p+2] + 1;
+      for (s=0;s<SEGS.length;s++){
+        var sg = SEGS[s];
+        if (Y + r1 < sg.y0 || Y - r1 > sg.y1 || X + r1 < sg.x0 || X - r1 > sg.x1) continue;
+        var t = ((X - sg.ax)*sg.dx + (Y - sg.ay)*sg.dy) / sg.l2;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        var wx = X - (sg.ax + sg.dx*t), wy = Y - (sg.ay + sg.dy*t);
+        if (wx*wx + wy*wy >= r1*r1) continue;
+        k = newContact();
+        k.a = a; k.b = null; k.p = p; k.seg = sg; k.ln = 0;
+        k.nx = sg.nx; k.ny = sg.ny; k.cx = X; k.cy = Y;
+        k.vn0 = pvx(a, Y - a.y)*sg.nx + pvy(a, X - a.x)*sg.ny;
+      }
     }
   }
-  /* страховка: что бы ни случилось, центр фрукта остаётся в кувшине */
-  if (g.y > RIM_Y){
-    var hw = hwAt(g.y);
-    if (g.x < CX - hw){ g.x = CX - hw + g.r*0.5; g.vx = Math.abs(g.vx)*0.3; }
-    if (g.x > CX + hw){ g.x = CX + hw - g.r*0.5; g.vx = -Math.abs(g.vx)*0.3; }
-  }
-  if (g.y > BOTTOM_Y){ g.y = BOTTOM_Y - g.r; g.vy = -Math.abs(g.vy)*0.2; }
 }
 
-function collide(a, b){
-  var dx = b.x-a.x, dy = b.y-a.y;
-  var min = a.r + b.r;
-  var d2 = dx*dx + dy*dy;
-  if (d2 >= min*min || d2 === 0) return;
-  var d = Math.sqrt(d2);
-  var nx = dx/d, ny = dy/d, ov = min - d;
-  var ta = a.m, tb = b.m, tot = ta + tb, c = ov*0.85;
-  a.x -= nx*c*(tb/tot); a.y -= ny*c*(tb/tot);
-  b.x += nx*c*(ta/tot); b.y += ny*c*(ta/tot);
-  a.touch = b.touch = true;
-  var rvx = b.vx-a.vx, rvy = b.vy-a.vy;
-  var vn = rvx*nx + rvy*ny;
-  if (vn < 0){
-    if (-vn > 320) clink(-vn);
-    var j = -1.15*vn / (1/ta + 1/tb);
-    a.vx -= j*nx/ta; a.vy -= j*ny/ta;
-    b.vx += j*nx/tb; b.vy += j*ny/tb;
+/* сдвиг тела позиционным импульсом (jx, jy), приложенным в точке r от центра */
+function push(g, jx, jy, rx, ry){
+  g.x += jx*g.im; g.y += jy*g.im;
+  g.angle += (rx*jy - ry*jx)*g.iI;
+  pose(g);
+}
+/* то же для скорости */
+function kick(g, jx, jy, rx, ry){
+  g.vx += jx*g.im; g.vy += jy*g.im;
+  g.spin += (rx*jy - ry*jx)*g.iI;
+}
+/* насколько точка тела (cx, cy) сдвинулась за шаг — для трения покоя */
+function moved(g, cx, cy){
+  var rx = cx - g.x, ry = cy - g.y, da = g.angle - g.pa;
+  var c = Math.cos(da), s = Math.sin(da);
+  return [g.x - g.px + rx - (c*rx + s*ry), g.y - g.py + ry - (-s*rx + c*ry)];
+}
+/* трение покоя: если точки касания проскользнули меньше, чем позволяет
+   прижатие, — возвращаем их друг к другу, и тело не едет, а катится */
+function holdFriction(k, a, b, nx, ny, cx, cy, mu){
+  var ma = moved(a, cx, cy), dx = ma[0], dy = ma[1];
+  if (b){ var mb = moved(b, cx, cy); dx -= mb[0]; dy -= mb[1]; }
+  var dn = dx*nx + dy*ny, tx = dx - dn*nx, ty = dy - dn*ny;
+  var lt = Math.sqrt(tx*tx + ty*ty);
+  if (lt < 1e-6) return;
+  tx /= lt; ty /= lt;
+  var rax = cx - a.x, ray = cy - a.y, ra = rax*ty - ray*tx;
+  var w = a.im + ra*ra*a.iI, rbx = 0, rby = 0;
+  if (b){ rbx = cx - b.x; rby = cy - b.y; var rb = rbx*ty - rby*tx; w += b.im + rb*rb*b.iI; }
+  var dl = lt / w;
+  if (dl > mu*k.ln) return;           /* прижатие не держит — пусть скользит */
+  push(a, -tx*dl, -ty*dl, rax, ray);
+  if (b) push(b, tx*dl, ty*dl, rbx, rby);
+}
+
+function solvePair(k){
+  var a = k.a, b = k.b, A = a.wc, B = b.wc, p = k.p, q = k.q;
+  var dx = B[q] - A[p], dy = B[q+1] - A[p+1], rr = A[p+2] + B[q+2], d2 = dx*dx + dy*dy;
+  if (d2 >= rr*rr || d2 < 1e-9) return;
+  var d = Math.sqrt(d2), nx = dx/d, ny = dy/d, pen = rr - d;
+  var cx = A[p] + nx*(A[p+2] - pen/2), cy = A[p+1] + ny*(A[p+2] - pen/2);
+  var rax = cx - a.x, ray = cy - a.y, rbx = cx - b.x, rby = cy - b.y;
+  var ra = rax*ny - ray*nx, rb = rbx*ny - rby*nx;
+  var dl = pen / (a.im + ra*ra*a.iI + b.im + rb*rb*b.iI);
+  k.ln += dl; k.nx = nx; k.ny = ny; k.cx = cx; k.cy = cy;
+  push(a, -nx*dl, -ny*dl, rax, ray);
+  push(b, nx*dl, ny*dl, rbx, rby);
+  holdFriction(k, a, b, nx, ny, cx, cy, MU_S);
+}
+
+function solveWall(k){
+  var g = k.a, A = g.wc, p = k.p, s = k.seg;
+  var X = A[p], Y = A[p+1], r = A[p+2];
+  var t = ((X - s.ax)*s.dx + (Y - s.ay)*s.dy) / s.l2;
+  var inner = t > 0 && t < 1;
+  t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  var ex = X - (s.ax + s.dx*t), ey = Y - (s.ay + s.dy*t);
+  var d = Math.sqrt(ex*ex + ey*ey);
+  if (d >= r) return;
+  var nx, ny, pen;
+  /* центр круга проскочил за стенку — выталкиваем по нормали отрезка.
+     Только для середины отрезка: у концов «сзади» бывает и законно внутри. */
+  if (inner && ex*s.nx + ey*s.ny < 0){ nx = s.nx; ny = s.ny; pen = r + d; }
+  else if (d < 1e-6){ nx = s.nx; ny = s.ny; pen = r; }
+  else { nx = ex/d; ny = ey/d; pen = r - d; }
+  var cx = X - nx*(r - pen/2), cy = Y - ny*(r - pen/2);
+  var rx = cx - g.x, ry = cy - g.y, rn = rx*ny - ry*nx;
+  var dl = pen / (g.im + rn*rn*g.iI);
+  k.ln += dl; k.nx = nx; k.ny = ny; k.cx = cx; k.cy = cy;
+  push(g, nx*dl, ny*dl, rx, ry);
+  holdFriction(k, g, null, nx, ny, cx, cy, MU_WALL);
+}
+
+/* После расталкивания: отскок и трение скольжения по скоростям */
+function bounceAndSlide(k, dt){
+  if (k.ln <= 0) return;
+  /* Всё считаем как «b относительно a», нормаль — от a к b. Стенка — это
+     неподвижное b; её нормаль смотрит от стенки к фрукту, поэтому разворачиваем. */
+  var a = k.a, b = k.b, cx = k.cx, cy = k.cy;
+  var nx = b ? k.nx : -k.nx, ny = b ? k.ny : -k.ny, vn0 = b ? k.vn0 : -k.vn0;
+  var rax = cx - a.x, ray = cy - a.y, rbx = 0, rby = 0, ux, uy;
+  if (b){
+    rbx = cx - b.x; rby = cy - b.y;
+    ux = pvx(b, rby) - pvx(a, ray); uy = pvy(b, rbx) - pvy(a, rax);
+  } else { ux = -pvx(a, ray); uy = -pvy(a, rax); }
+  var un = ux*nx + uy*ny;               /* < 0 — сближаются */
+  var ra = rax*ny - ray*nx, wn = a.im + ra*ra*a.iI;
+  if (b){ var rb = rbx*ny - rby*nx; wn += b.im + rb*rb*b.iI; }
+  /* отскок — только от настоящего удара, а не от веса соседа сверху */
+  var e = -vn0 > 2*GRAV*dt ? (b ? E_FRUIT : E_WALL) : 0;
+  var target = Math.max(0, -e*vn0);
+  if (-vn0 > (b ? 320 : 260)) clink(-vn0);
+  if (un < target){
+    var J = (target - un) / wn;
+    kick(a, -nx*J, -ny*J, rax, ray);
+    if (b) kick(b, nx*J, ny*J, rbx, rby);
+    un = target;
   }
+  var tx = ux - un*nx, ty = uy - un*ny, ut = Math.sqrt(tx*tx + ty*ty);
+  if (ut < 1e-6) return;
+  tx /= ut; ty /= ut;
+  var rat = rax*ty - ray*tx, wt = a.im + rat*rat*a.iI;
+  if (b){ var rbt = rbx*ty - rby*tx; wt += b.im + rbt*rbt*b.iI; }
+  var Jt = Math.min(ut / wt, (b ? MU_D : MU_WALL) * k.ln / dt);
+  /* гасим относительное скольжение: a — вдоль него, b — против */
+  kick(a, tx*Jt, ty*Jt, rax, ray);
+  if (b) kick(b, -tx*Jt, -ty*Jt, rbx, rby);
 }
 
 function physics(dt){
-  var gs = S.gems, i, j, it, g;
+  var gs = S.gems, i, it, g;
   for (i=0;i<gs.length;i++){
     g = gs[i];
     g.t += dt;
-    if (g.pop < 1) g.pop = Math.min(1, g.pop + dt/0.2);
-    g.px = g.x; g.touch = false;
+    if (g.pop < 1){ g.pop = Math.min(1, g.pop + dt/0.2); }
+    g.sc = 0.6 + 0.4*g.pop;
+    g.px = g.x; g.py = g.y; g.pa = g.angle;
     g.vy += GRAV*dt;
-    g.x += g.vx*dt; g.y += g.vy*dt;
     g.vx *= 0.9985;
-    g.angle += g.spin*dt; g.spin *= 0.985;
+    g.spin *= 0.995;
+    g.x += g.vx*dt; g.y += g.vy*dt;
+    g.angle += g.spin*dt;
+    pose(g);
   }
+  findContacts(dt);
   for (it=0; it<4; it++){
-    for (i=0;i<gs.length;i++){
-      var a = gs[i];
-      if (a.state !== "live" || a.dead) continue;
-      for (j=i+1;j<gs.length;j++){
-        var b = gs[j];
-        if (b.state !== "live" || b.dead) continue;
-        collide(a, b);
-      }
-      walls(a);
-    }
+    for (i=0;i<NC;i++){ var k = CONTACTS[i]; if (k.b) solvePair(k); else solveWall(k); }
   }
-  /* Вращение берётся из того, насколько фрукт реально сдвинулся, а не из
-     скоростей в контактах: в лежащей куче соседи всё время чуть давят друг
-     на друга, и раньше это раскручивало неподвижный фрукт без конца.
-     Катится вбок на dx — поворачивается на dx/r; стоит на месте — замирает. */
   for (i=0;i<gs.length;i++){
     g = gs[i];
-    if (!g.touch) continue;
-    var ax = (g.x - g.px) / dt;
-    /* толчок при слиянии сдвигает соседей рывком — без потолка они бы на миг взвихрились */
-    var target = Math.abs(ax) < 8 ? 0 : Math.max(-10, Math.min(10, ax / g.r));
-    g.spin += (target - g.spin) * 0.2;
+    /* страховка: что бы ни случилось, центр фрукта остаётся в кувшине */
+    if (g.y > RIM_Y){
+      var hw = hwAt(g.y);
+      if (g.x < CX - hw) g.x = CX - hw + g.r*0.5;
+      if (g.x > CX + hw) g.x = CX + hw - g.r*0.5;
+    }
+    if (g.y > BOTTOM_Y) g.y = BOTTOM_Y - g.r;
+    pose(g);
+    /* скорость — из фактического сдвига за шаг */
+    g.vx = (g.x - g.px)/dt; g.vy = (g.y - g.py)/dt; g.spin = (g.angle - g.pa)/dt;
+    var v = Math.sqrt(g.vx*g.vx + g.vy*g.vy);
+    if (v > VMAX){ g.vx *= VMAX/v; g.vy *= VMAX/v; }
   }
+  for (i=0;i<NC;i++) bounceAndSlide(CONTACTS[i], dt);
+  for (i=0;i<gs.length;i++){
+    g = gs[i];
+    if (g.spin > WMAX) g.spin = WMAX; else if (g.spin < -WMAX) g.spin = -WMAX;
+    /* Реальная скорость — по фактическому сдвигу за шаг, сглаженная:
+       по ней решаем, улёгся ли фрукт (переполнение, конец партии). */
+    var mv = Math.sqrt((g.x - g.px)*(g.x - g.px) + (g.y - g.py)*(g.y - g.py)) / dt;
+    g.rs += (mv - g.rs) * 0.08;
+    /* улёгшийся фрукт не дрожит поворотом на месте */
+    if (g.rs < 12) g.spin *= 0.9;
+  }
+  for (i=0;i<NC;i++){ CONTACTS[i].a = CONTACTS[i].b = null; }
   mergePass();
   cratePass();
   var alive = [];
@@ -445,7 +689,7 @@ function spawnCrate(x, y){
   c.vx = (Math.random()-0.5)*240;
   c.vy = -340 - Math.random()*130;
   c.spin = (Math.random()-0.5)*7;
-  c.pop = 0;
+  c.pop = 0; c.sc = 0.6; pose(c);
   S.gems.push(c);
   burst(x, y, "#ffd75e", 14, 210);
 }
@@ -480,10 +724,25 @@ function mergePass(){
       var b = gs[j];
       if (b.state!=="live" || b.dead) continue;
       if (a.tier !== b.tier) continue;
-      var dx = b.x-a.x, dy = b.y-a.y, min = a.r+b.r+0.5;
-      if (dx*dx + dy*dy <= min*min){ doMerge(a,b); break; }
+      /* Зажатые в куче фрукты иногда замирают в паре пикселей друг от друга:
+         на глаз они касаются, а тела — нет. Сливаем и с таким зазором. */
+      var tol = Math.max(2, 0.08*a.r);
+      if (gapBetween(a, b, tol) <= tol){ doMerge(a,b); break; }
     }
   }
+}
+/* наименьший зазор между телами (меньше нуля — пересекаются);
+   дальние пары отсекаем по описанным окружностям */
+function gapBetween(a, b, tol){
+  var dx = b.x - a.x, dy = b.y - a.y, RR = SHAPES[a.tier].R*a.sc + SHAPES[b.tier].R*b.sc + tol;
+  if (dx*dx + dy*dy > RR*RR) return 1e9;
+  var A = a.wc, B = b.wc, best = 1e9;
+  for (var p=0;p<A.length;p+=3) for (var q=0;q<B.length;q+=3){
+    var ex = B[q] - A[p], ey = B[q+1] - A[p+1];
+    var g = Math.sqrt(ex*ex + ey*ey) - A[p+2] - B[q+2];
+    if (g < best) best = g;
+  }
+  return best;
 }
 
 function doMerge(a, b){
@@ -508,14 +767,16 @@ function doMerge(a, b){
   var g = makeFruit(nt, x, y);
   g.vx = (a.vx + b.vx)*0.25;
   g.vy = (a.vy + b.vy)*0.25 - 40;
-  g.pop = 0;
+  g.pop = 0; g.sc = 0.6; pose(g);
   var d = FRUITS[nt];
   ring(x, y, (a.r + b.r)*0.6, d.l);
 
   if (nt === TOP){
-    S.melons++; S.flash = 0.5; S.shake = 8;
+    /* каждый собранный арбуз — коктейль: он вылетает к счётчику наверху */
+    S.cocktails++; S.flash = 0.5; S.shake = 8;
+    S.flyers.push({ x:x, y:y, t:0 });
     burst(x, y, "#e6ffe0", 30, 320);
-    pop(x, y-42, "АРБУЗ!", "#d8ffd8", 28);
+    pop(x, y-42, "КОКТЕЙЛЬ!", "#ffd6ea", 28);
     pop(x, y-4, "+" + SCORES[TOP], "#ffe9a8", 24);
     sfxMelon();
   } else {
@@ -545,19 +806,30 @@ function shockwave(x, y){
 var SHARD_MAX = 320;
 function shatter(g){
   var d = FRUITS[g.tier], n = 8 + g.tier*4, i, j;
+  var cs = SHAPES[g.tier].c, ca = Math.cos(g.angle), sa = Math.sin(g.angle), tot = 0;
+  for (i=0;i<cs.length;i++) tot += cs[i][2]*cs[i][2];
   for (i=0;i<n;i++){
-    var a = Math.random()*6.283, rr = g.r*Math.sqrt(Math.random())*0.8;
+    /* точка внутри тела: круг — по площади, место в нём — равномерно */
+    var pick = Math.random()*tot, c = cs[0];
+    for (j=0;j<cs.length;j++){ pick -= cs[j][2]*cs[j][2]; if (pick <= 0){ c = cs[j]; break; } }
+    var u = Math.random()*6.283, rr = c[2]*Math.sqrt(Math.random())*0.85;
+    var lx = c[0] + Math.cos(u)*rr, ly = c[1] + Math.sin(u)*rr;
+    var wx = ca*lx - sa*ly, wy = sa*lx + ca*ly;
+    /* летит от центра фрукта */
+    var a = (wx*wx + wy*wy > 4) ? Math.atan2(wy, wx) : Math.random()*6.283;
     var sp = (140 + Math.random()*330) * (0.8 + g.tier*0.07);
-    var s = Math.max(3, g.r*(0.1 + Math.random()*0.16));
+    var s = Math.max(4, g.r*(0.14 + Math.random()*0.18));
     var k = Math.random() < 0.4 ? 4 : 3, pts = [];
     for (j=0;j<k;j++){
       var aa = j*6.283/k + (Math.random()-0.5)*1.1;
       var rad = s*(0.45 + Math.random()*0.7);
       pts.push(Math.cos(aa)*rad, Math.sin(aa)*rad);
     }
-    S.shards.push({ x:g.x + Math.cos(a)*rr, y:g.y + Math.sin(a)*rr,
+    /* rot начинается с угла фрукта: осколок — кусок картинки ровно с того
+       места, где он был, и дальше кувыркается сам */
+    S.shards.push({ x:g.x + wx, y:g.y + wy, tier:g.tier, lx:lx, ly:ly,
       vx:Math.cos(a)*sp + g.vx*0.3, vy:Math.sin(a)*sp - 170 + g.vy*0.3,
-      rot:Math.random()*6.283, spin:(Math.random()-0.5)*18, pts:pts,
+      rot:g.angle, spin:(Math.random()-0.5)*18, pts:pts,
       fill:rgba(d.c, 0.62), edge:rgba(d.l, 0.95), life:0, max:0.9 + Math.random()*0.7 });
   }
   if (S.shards.length > SHARD_MAX) S.shards.splice(0, S.shards.length - SHARD_MAX);
@@ -618,23 +890,40 @@ function updateFx(dt){
     if (q.life < q.max) keep.push(q);
   }
   S.pops = keep;
+
+  /* коктейль летит из кувшина к табличке; долетел — счётчик подпрыгивает */
+  keep = [];
+  for (i=0;i<S.flyers.length;i++){
+    var f = S.flyers[i];
+    f.t += dt/0.8;
+    if (f.t < 1) keep.push(f);
+    else { S.cocktailBump = 0.4; tone(1568, 0.25, "sine", 0.08); tone(2093, 0.3, "sine", 0.06, 0.06); }
+  }
+  S.flyers = keep;
+  S.cocktailBump = Math.max(0, S.cocktailBump - dt);
 }
 
 /* куда упадёт фрукт: верх кучи под прицелом или дно */
-function landingY(x, r){
-  var y = BOTTOM_Y - r, i;
+/* Возвращает, где окажется центр фрукта: опускаем его форму (без поворота)
+   по вертикали, пока какой-нибудь её круг не коснётся кучи, дна или бока. */
+function landingY(x, tier){
+  var sh = SHAPES[tier], fc = sh.c, y = BOTTOM_Y - sh.bot, i, f, p;
   for (i=0;i<S.gems.length;i++){
     var g = S.gems[i];
     if (g.state !== "live" || g.dead) continue;
-    var dx = g.x - x, R = g.r + r;
-    if (Math.abs(dx) >= R) continue;
-    var cy = g.y - Math.sqrt(R*R - dx*dx);
-    if (cy < y) y = cy;
+    if (Math.abs(g.x - x) > SHAPES[g.tier].R + sh.R) continue;
+    var w = g.wc;
+    for (f=0;f<fc.length;f++) for (p=0;p<w.length;p+=3){
+      var dx = w[p] - (x + fc[f][0]), R = w[p+2] + fc[f][2];
+      if (Math.abs(dx) >= R) continue;
+      var cy = w[p+1] - Math.sqrt(R*R - dx*dx) - fc[f][1];
+      if (cy < y) y = cy;
+    }
   }
-  for (var yy = 380; yy < y; yy += 3){
-    if (Math.abs(x - CX) + r > hwAt(yy)){ y = yy; break; }
+  for (var yy = 380; yy < y + sh.bot; yy += 3){
+    if (Math.abs(x - CX) + sh.hw > hwAt(yy)){ y = yy - sh.bot; break; }
   }
-  return Math.max(hoverY(r), y);
+  return Math.max(hoverY(tier), y);
 }
 
 /* ============== ОТРИСОВКА ФРУКТОВ ==============
@@ -660,9 +949,11 @@ function roundRect(x,y,w,h,r){
 function bodyBox(tier, r){
   switch(tier){
     case 2: return [0, 0.06*r, 0.92*r, 0.9*r];
-    case 3: return [0, 0, r, 0.9*r];
-    case 5: return [0, 0.04*r, 0.78*r, 0.94*r];
-    case 6: return [0, 0.2*r, 0.76*r, 0.8*r];
+    /* Физика считает фрукт кругом радиуса r, поэтому тело почти заполняет
+       этот круг: у узкого овала соседи лежали бы на «пустом воздухе». */
+    case 3: return [0, 0, r, 0.94*r];
+    case 5: return [0, 0.03*r, 0.92*r, 0.97*r];
+    case 6: return [0, 0.05*r, 0.94*r, 0.95*r];
     default: return [0, 0, r, r];
   }
 }
@@ -675,12 +966,9 @@ function bodyPath(tier, r){
     ctx.bezierCurveTo(-0.32*r, 0.95*r, -0.78*r, 0.52*r, -0.92*r,0);
     ctx.bezierCurveTo(-1.08*r,-0.55*r, -0.55*r,-0.98*r,  0,-0.72*r);
     ctx.closePath();
-  } else if (tier === 3){
-    ctx.ellipse(0, 0, r, 0.9*r, 0, 0, 6.283);
-  } else if (tier === 5){
-    ctx.ellipse(0, 0.04*r, 0.78*r, 0.94*r, 0, 0, 6.283);
-  } else if (tier === 6){
-    ctx.ellipse(0, 0.2*r, 0.76*r, 0.8*r, 0, 0, 6.283);
+  } else if (tier === 3 || tier === 5 || tier === 6){
+    var b = bodyBox(tier, r);
+    ctx.ellipse(b[0], b[1], b[2], b[3], 0, 0, 6.283);
   } else {
     ctx.arc(0, 0, r, 0, 6.283);
   }
@@ -786,8 +1074,10 @@ function drawFruitBody(tier, r){
     glassLeaf(0.38*r, -1.66*r, 0.9*r, 0.32*r, 1.15);
   }
   if (tier === 6){
-    var L = [[-0.95,0.42],[-0.55,0.58],[-0.22,0.72],[0,0.78],[0.22,0.72],[0.55,0.58],[0.95,0.42]];
-    for (i=0;i<L.length;i++) glassLeaf(L[i][0]*0.14*r, -0.5*r, L[i][1]*r, 0.13*r, L[i][0]*0.75);
+    /* корона почти целиком внутри круга столкновений: иначе ананасы
+       «касаются» листьями, а для физики между ними ещё зазор */
+    var L = [[-0.95,0.22],[-0.55,0.28],[-0.22,0.33],[0,0.35],[0.22,0.33],[0.55,0.28],[0.95,0.22]];
+    for (i=0;i<L.length;i++) glassLeaf(L[i][0]*0.14*r, -0.8*r, L[i][1]*r, 0.11*r, L[i][0]*0.75);
   }
 
   /* тело */
@@ -915,7 +1205,7 @@ function drawFruitBody(tier, r){
        кончики загнуты от центра — снизу вверх, чтобы верхние ложились поверх нижних */
     var BR = [[-0.2,0.8],[0.34,0.78],[-0.56,0.44],[0.1,0.42],[0.6,0.4],[-0.62,0.02],[-0.06,-0.04],[0.56,-0.02],[-0.36,-0.42],[0.32,-0.44]];
     for (i=0;i<BR.length;i++){
-      var px = BR[i][0]*r, py = (BR[i][1] + 0.04)*r, pl = Math.sqrt(px*px + py*py) || 1;
+      var px = BR[i][0]*1.15*r, py = (BR[i][1] + 0.03)*r, pl = Math.sqrt(px*px + py*py) || 1;
       var ddx = px/pl*0.4, ddy = py/pl*0.4 - 1, dl = Math.sqrt(ddx*ddx + ddy*ddy);
       bract(px, py, 0.36*r, 0.19*r, Math.atan2(ddx/dl, -ddy/dl), px < 0 ? -1 : 1);
     }
@@ -1008,8 +1298,64 @@ function buildSprites(){
   }
 }
 
+/* Картинки фруктов. Пока картинка грузится (или если не загрузилась —
+   например, в версии-артефакте без папки img/), рисуется прежний
+   нарисованный кодом фрукт, а физика всё равно идёт по форме картинки. */
+var ART_READY = 0;
+function imageSprite(tier, im){
+  var sh = SHAPES[tier], P = 8, w = sh.iw + P*2, h = sh.ih + P*2;
+  var c = document.createElement("canvas");
+  c.width = Math.ceil(w*SS); c.height = Math.ceil(h*SS);
+  var g2 = c.getContext("2d");
+  g2.imageSmoothingQuality = "high";
+  g2.setTransform(SS, 0, 0, SS, 0, 0);
+  g2.shadowColor = "rgba(0,0,0,.35)"; g2.shadowBlur = 6*SS; g2.shadowOffsetY = 3*SS;
+  g2.drawImage(im, P, P, sh.iw, sh.ih);
+  /* ox, oy — где на спрайте центр масс; bx, by — центр всей картинки */
+  return { img: c, w: w, h: h, ox: P + sh.ix, oy: P + sh.iy, bx: P + sh.iw/2, by: P + sh.ih/2, fit: Math.max(sh.iw, sh.ih) };
+}
+function loadFruitArt(){
+  for (var t=1;t<ART.length;t++) (function(t){
+    var im = new Image();
+    im.onload = function(){
+      SPRITES[t] = imageSprite(t, im);
+      /* лестница запечена — перепекаем, когда пришли все картинки */
+      if (++ART_READY === ART.length - 1) LADDER = bake(LADDER_BOX.x, LADDER_BOX.y, LADDER_BOX.w, LADDER_BOX.h, drawLadderRaw);
+    };
+    im.src = ART[t].src;
+  })(t);
+}
+
+/* значок: картинка целиком (с хвостиком и листьями) вписана в квадрат size */
+function drawFruitIcon(tier, x, y, size, alpha){
+  var sp = SPRITES[tier];
+  if (!sp.img){ drawFruit(tier, x, y, size/2, 0, alpha, 0); return; }
+  var f = size / sp.fit;
+  ctx.save();
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.drawImage(sp.img, x - sp.bx*f, y - sp.by*f, sp.w*f, sp.h*f);
+  ctx.restore();
+}
+
 function drawFruit(tier, x, y, r, angle, alpha, glow){
   var d = FRUITS[tier], sp = SPRITES[tier];
+  if (sp.img){
+    var f = r / d.r;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.globalAlpha = (alpha === undefined) ? 1 : alpha;
+    if (glow){
+      ctx.save(); ctx.globalAlpha *= glow*0.5;
+      var g0 = ctx.createRadialGradient(0,0,r*0.4, 0,0,r*2.1);
+      g0.addColorStop(0, rgba(d.l, 1)); g0.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g0; ctx.beginPath(); ctx.arc(0,0,r*2.1,0,6.283); ctx.fill();
+      ctx.restore();
+    }
+    if (angle) ctx.rotate(angle);
+    ctx.drawImage(sp.img, -sp.ox*f, -sp.oy*f, sp.w*f, sp.h*f);
+    ctx.restore();
+    return;
+  }
   ctx.save();
   ctx.translate(x, y);
   ctx.globalAlpha = (alpha === undefined) ? 1 : alpha;
@@ -1060,11 +1406,37 @@ var BULBS = [];
     BULBS.push({ x:x, y:y + 7, c:cols[i % cols.length], p:Math.random()*6.28 });
   }
 })();
+/* Море живое: блики солнечной дорожки и рябь по всей воде.
+   Вода видна от горизонта до барной стойки (SEA_Y1), и сквозь кувшин тоже. */
+var SEA_Y1 = 648;
 var GLINTS = [];
-for (var gi=0; gi<34; gi++){
+for (var gi=0; gi<40; gi++){
   var gd = Math.random();
-  GLINTS.push({ x: SUN.x + (Math.random()-0.5)*(30 + gd*170), y: HORIZON + 6 + gd*gd*250,
-    w: 6 + Math.random()*18*(0.4+gd), p: Math.random()*6.28, s: 1.5 + Math.random()*2.5 });
+  GLINTS.push({ x: SUN.x + (Math.random()-0.5)*(30 + gd*170), y: HORIZON + 6 + gd*gd*(SEA_Y1 - HORIZON - 12),
+    w: 6 + Math.random()*18*(0.4+gd), p: Math.random()*6.28, s: 1.5 + Math.random()*2.5, c: "#ffd9a0", a: 0.55 });
+}
+for (gi=0; gi<46; gi++){
+  var gr = Math.random();
+  GLINTS.push({ x: 42 + Math.random()*(W - 84), y: HORIZON + 8 + gr*(SEA_Y1 - HORIZON - 14),
+    w: 5 + gr*16, p: Math.random()*6.28, s: 1 + gr*1.6, c: "#bfe6ff", a: 0.32 });
+}
+
+/* Гирлянда горит ровно и лишь изредка мигает: раз в 2–5 секунд
+   одна-две случайные лампочки дважды быстро гаснут. */
+var BLINK_NEXT = 0;
+function bulbBlink(now){
+  if (now > BLINK_NEXT){
+    var n = Math.random() < 0.3 ? 2 : 1;
+    for (var i=0;i<n;i++) BULBS[(Math.random()*BULBS.length)|0].blink = now;
+    BLINK_NEXT = now + 2 + Math.random()*3;
+  }
+}
+/* 1 — горит, 0 — погасла */
+function bulbOn(b, now){
+  if (b.blink === undefined) return 1;
+  var u = (now - b.blink) / 0.5;
+  if (u < 0 || u >= 1) return 1;
+  return (u < 0.22 || (u >= 0.5 && u < 0.72)) ? 0 : 1;
 }
 
 function bambooV(x, w, y0, y1){
@@ -1175,9 +1547,7 @@ function drawBarRaw(){
   /* бамбуковые стойки и перекладина для прищепки */
   bambooV(0, 16, 0, COUNTER_Y);
   bambooV(W-16, 16, 0, COUNTER_Y);
-  ctx.strokeStyle = "rgba(200,160,100,.8)"; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(66, 50); ctx.lineTo(66, RAIL_Y+2); ctx.moveTo(402, 50); ctx.lineTo(402, RAIL_Y+2); ctx.stroke();
-  bambooH(54, 414, RAIL_Y - 5, 10);
+  drawRail();
 
   /* соломенная крыша */
   ctx.fillStyle = "#5c3a15"; ctx.fillRect(0, 0, W, 50);
@@ -1223,6 +1593,19 @@ function drawBarRaw(){
   ctx.beginPath(); ctx.arc(0, 0, 190, 0, 6.283); ctx.fill(); ctx.restore();
 }
 
+/* Область, где видны фрукты: всё выше края кувшина и внутренность до
+   середины толщины стекла. */
+function jugClip(){
+  var top = RIM_Y - 16, pad = 4, i;
+  ctx.beginPath();
+  ctx.moveTo(0, -50); ctx.lineTo(W, -50); ctx.lineTo(W, top);
+  for (i=0;i<SIDE.length;i++) ctx.lineTo(CX + SIDE[i][1] + pad, Math.max(top, SIDE[i][0]));
+  ctx.lineTo(CX + SIDE[SIDE.length-1][1] + pad, BOTTOM_Y + pad);
+  ctx.lineTo(CX - SIDE[SIDE.length-1][1] - pad, BOTTOM_Y + pad);
+  for (i=SIDE.length-1;i>=0;i--) ctx.lineTo(CX - SIDE[i][1] - pad, Math.max(top, SIDE[i][0]));
+  ctx.lineTo(0, top);
+  ctx.closePath();
+}
 function loopPath(P){
   ctx.moveTo(P[0][0], P[0][1]);
   for (var i=1;i<P.length;i++) ctx.lineTo(P[i][0], P[i][1]);
@@ -1314,11 +1697,68 @@ function drawJugFrontRaw(){
   star4(CX - RIM_HW + 30, RIM_Y + 6, 6, 0.8);
 }
 
+/* перекладина с двумя верёвками до крыши */
+function drawRail(){
+  ctx.strokeStyle = "rgba(200,160,100,.8)"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(66, 50); ctx.lineTo(66, RAIL_Y+2); ctx.moveTo(402, 50); ctx.lineTo(402, RAIL_Y+2); ctx.stroke();
+  bambooH(54, 414, RAIL_Y - 5, 10);
+}
+
+/* ---- сцена из картинок ----
+   Пока картинки грузятся (или если не загрузились, как в версии-артефакте),
+   остаётся сцена, нарисованная кодом: её кувшин строится по тому же PROFILE. */
+var SCENE_IMG = { bg: "scene/background.jpg", back: "scene/jug-back.png", front: "scene/jug-front.png" };
+/* лампочки гирлянды на картинке фона — поверх них мерцает свечение */
+var BG_BULBS = [[36,130,"#ffd36b"],[98,149,"#ff7fc8"],[166,158,"#6fdcff"],[232,169,"#8dff7a"],[300,169,"#ffd36b"],
+  [371,174,"#ff7fc8"],[438,163,"#ff7fc8"],[503,162,"#ffd36b"],[569,170,"#6fdcff"],[631,173,"#8dff7a"],
+  [692,171,"#ffd36b"],[754,169,"#ff7fc8"],[817,157,"#ff7fc8"],[880,149,"#6fdcff"],[934,131,"#ffd36b"]];
+var BG_FROM_IMAGE = false;
+function loadSceneArt(){
+  var bg = new Image();
+  bg.onload = function(){
+    var sx = W/bg.width, sy = H/bg.height;
+    BG = bake(0, 0, W, H, function(){
+      ctx.drawImage(bg, 0, 0, W, H);
+      /* тень кувшина на стойке */
+      var by = JUG_Y0 + 806*JUG_K;
+      var g = ctx.createRadialGradient(CX, by, 10, CX, by, 170);
+      g.addColorStop(0, "rgba(0,0,0,.5)"); g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.save(); ctx.translate(CX, by); ctx.scale(1, 0.07);
+      ctx.beginPath(); ctx.arc(0, 0, 170, 0, 6.283); ctx.fill(); ctx.restore();
+      drawRail();
+    });
+    BULBS = [];
+    for (var i=0;i<BG_BULBS.length;i++){
+      var b = BG_BULBS[i];
+      BULBS.push({ x: b[0]*sx, y: b[1]*sy, c: b[2], p: Math.random()*6.28 });
+    }
+    makeBulbSprites();
+    BG_FROM_IMAGE = true;
+  };
+  bg.src = SCENE_IMG.bg;
+
+  var back = new Image();
+  back.onload = function(){
+    JUG_BACK = bake(0, 200, W, 540, function(){
+      ctx.drawImage(back, CX - JUG_BX*JUG_K, JUG_Y0, back.width*JUG_K, back.height*JUG_K);
+    });
+  };
+  back.src = SCENE_IMG.back;
+
+  var front = new Image();
+  front.onload = function(){
+    var k = JUG_K/FRONT_S;
+    JUG_FRONT = bake(0, 200, W, 540, function(){
+      ctx.drawImage(front, CX + (-FRONT_DX/FRONT_S - JUG_BX)*JUG_K, JUG_Y0 - FRONT_DY/FRONT_S*JUG_K,
+                    front.width*k, front.height*k);
+    });
+  };
+  front.src = SCENE_IMG.front;
+}
+
 var BG = null, JUG_BACK = null, JUG_FRONT = null, BULB_SPR = {};
-function buildScene(){
-  BG = bake(0, 0, W, H, drawBarRaw);
-  JUG_BACK = bake(30, 140, 450, 580, drawJugBackRaw);
-  JUG_FRONT = bake(30, 140, 450, 580, drawJugFrontRaw);
+function makeBulbSprites(){
   for (var i=0;i<BULBS.length;i++){
     var c = BULBS[i].c;
     if (BULB_SPR[c]) continue;
@@ -1329,6 +1769,12 @@ function buildScene(){
     }; })(c));
   }
 }
+function buildScene(){
+  BG = bake(0, 0, W, H, drawBarRaw);
+  JUG_BACK = bake(30, 140, 450, 580, drawJugBackRaw);
+  JUG_FRONT = bake(30, 140, 450, 580, drawJugFrontRaw);
+  makeBulbSprites();
+}
 
 function drawLights(){
   var i;
@@ -1337,22 +1783,32 @@ function drawLights(){
   for (i=0;i<GLINTS.length;i++){
     var gl = GLINTS[i], a = Math.max(0, Math.sin(S.time*1.8 + gl.p));
     if (a < 0.05) continue;
-    ctx.globalAlpha = a*0.55;
-    ctx.fillStyle = "#ffd9a0";
+    ctx.globalAlpha = a*gl.a;
+    ctx.fillStyle = gl.c;
     ctx.fillRect(gl.x - gl.w/2 + Math.sin(S.time*0.7 + gl.p)*4, gl.y, gl.w, gl.s);
   }
+  var now = performance.now()/1000;
+  bulbBlink(now);
   for (i=0;i<BULBS.length;i++){
-    var b = BULBS[i], f = 0.75 + 0.25*Math.sin(S.time*2.3 + b.p);
-    var sp = BULB_SPR[b.c];
-    ctx.globalAlpha = f;
-    ctx.drawImage(sp.cv, b.x - 24, b.y - 24, 48, 48);
+    var b = BULBS[i];
+    if (!bulbOn(b, now)) continue;
+    ctx.globalAlpha = 0.8;
+    ctx.drawImage(BULB_SPR[b.c].cv, b.x - 24, b.y - 24, 48, 48);
   }
   ctx.restore();
   for (i=0;i<BULBS.length;i++){
-    var q = BULBS[i];
+    var q = BULBS[i], on = bulbOn(q, now);
+    if (BG_FROM_IMAGE){
+      /* лампочка нарисована на фоне — гасим её тёмным пятном поверх */
+      if (on) continue;
+      var dg = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, 8);
+      dg.addColorStop(0, "rgba(40,18,8,.85)"); dg.addColorStop(0.6, "rgba(40,18,8,.6)"); dg.addColorStop(1, "rgba(40,18,8,0)");
+      ctx.fillStyle = dg; ctx.beginPath(); ctx.arc(q.x, q.y, 8, 0, 6.283); ctx.fill();
+      continue;
+    }
     ctx.fillStyle = "#2a160a"; ctx.fillRect(q.x - 2, q.y - 9, 4, 4);
-    ctx.fillStyle = q.c; ctx.beginPath(); ctx.ellipse(q.x, q.y, 3.6, 5, 0, 0, 6.283); ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,.8)"; ctx.beginPath(); ctx.arc(q.x - 1.2, q.y - 1.6, 1.2, 0, 6.283); ctx.fill();
+    ctx.fillStyle = on ? q.c : "#4a3020"; ctx.beginPath(); ctx.ellipse(q.x, q.y, 3.6, 5, 0, 0, 6.283); ctx.fill();
+    if (on){ ctx.fillStyle = "rgba(255,255,255,.8)"; ctx.beginPath(); ctx.arc(q.x - 1.2, q.y - 1.6, 1.2, 0, 6.283); ctx.fill(); }
   }
 }
 
@@ -1362,8 +1818,8 @@ function drawDangerLine(){
   for (i=0;i<S.gems.length;i++){
     var g = S.gems[i];
     if (g.state !== "live" || g.tier === 0) continue;
-    if (Math.abs(g.vx) + Math.abs(g.vy) > 45) continue;
-    var k = (BOTTOM_Y - (g.y - g.r)) / (BOTTOM_Y - DANGER_Y);
+    if (g.rs > 40) continue;
+    var k = (BOTTOM_Y - topOf(g)) / (BOTTOM_Y - DANGER_Y);
     if (k > near) near = k;
   }
   near = Math.max(0, Math.min(1, near));
@@ -1394,8 +1850,8 @@ function canDrop(){ return !S.over && S.left > 0; }
 
 function drawGuide(){
   if (!canDrop() || S.cool > 0) return;
-  var t = S.queue[0], r = FRUITS[t].r, x = dropX(r);
-  var y1 = landingY(x, r) + r, y0 = hoverY(r) + r + 4;
+  var t = S.queue[0], sh = SHAPES[t], x = dropX(t);
+  var y1 = landingY(x, t) + sh.bot, y0 = hoverY(t) + sh.bot + 4;
   if (y1 <= y0) return;
   ctx.save();
   var g = ctx.createLinearGradient(0, y0, 0, y1);
@@ -1408,24 +1864,26 @@ function drawGuide(){
 
 /* прищепка на бамбуковой перекладине и фрукт под ней */
 function drawDropper(){
-  var t = S.queue[0], r = FRUITS[t].r;
-  var x = canDrop() ? dropX(r) : CX;
+  var t = S.queue[0], r = FRUITS[t].r, sh = SHAPES[t];
+  var x = canDrop() ? dropX(t) : CX;
   var ready = canDrop() ? 1 - Math.max(0, S.cool)/DROP_CD : 0;
+  /* прищепка — прямо над кончиком хвостика, нитка висит отвесно */
+  var clipX = x + sh.hx;
   ctx.save();
-  /* нитка */
   if (ready > 0){
     var sway = Math.sin(S.time*2.2)*0.12;
-    var fy = hoverY(r) + Math.sin(S.time*3)*1.5;
-    var topY = fy - r*Math.cos(sway);
+    var fy = hoverY(t) + Math.sin(S.time*3)*1.5;
+    var e = ready < 1 ? 1 - Math.pow(1 - ready, 3) : 1, k = 0.4 + 0.6*e;
+    /* где кончик хвостика при текущем покачивании и росте */
+    var hx = (Math.cos(sway)*sh.hx - Math.sin(sway)*sh.hy)*k, hy = (Math.sin(sway)*sh.hx + Math.cos(sway)*sh.hy)*k;
     ctx.strokeStyle = "rgba(240,220,180,.75)"; ctx.lineWidth = 1.2;
-    ctx.beginPath(); ctx.moveTo(x, RAIL_Y + 10); ctx.lineTo(x + Math.sin(sway)*r, topY + 2); ctx.stroke();
-    var e = ready < 1 ? 1 - Math.pow(1 - ready, 3) : 1;
-    drawFruit(t, x, fy, r*(0.4 + 0.6*e), sway, e, 0);
+    ctx.beginPath(); ctx.moveTo(clipX, RAIL_Y + 10); ctx.lineTo(x + hx, fy + hy + 1); ctx.stroke();
+    drawFruit(t, x, fy, r*k, sway, e, 0);
   }
   /* прищепка */
-  ctx.fillStyle = "#c98f4c"; roundRect(x - 4.5, RAIL_Y - 9, 9, 22, 3); ctx.fill();
+  ctx.fillStyle = "#c98f4c"; roundRect(clipX - 4.5, RAIL_Y - 9, 9, 22, 3); ctx.fill();
   ctx.strokeStyle = "#5a3412"; ctx.lineWidth = 1; ctx.stroke();
-  ctx.fillStyle = "#8a8f96"; ctx.fillRect(x - 5, RAIL_Y - 1, 10, 3);
+  ctx.fillStyle = "#8a8f96"; ctx.fillRect(clipX - 5, RAIL_Y - 1, 10, 3);
   ctx.restore();
 }
 
@@ -1438,8 +1896,17 @@ function drawShards(){
     ctx.beginPath(); ctx.moveTo(p[0], p[1]);
     for (var k=2;k<p.length;k+=2) ctx.lineTo(p[k], p[k+1]);
     ctx.closePath();
-    ctx.fillStyle = s.fill; ctx.fill();
-    ctx.strokeStyle = s.edge; ctx.lineWidth = 1; ctx.stroke();
+    var sp = SPRITES[s.tier];
+    if (sp && sp.img){
+      /* осколок — вырезанный кусок картинки с того места, где он был */
+      ctx.save(); ctx.clip();
+      ctx.drawImage(sp.img, -s.lx - sp.ox, -s.ly - sp.oy, sp.w, sp.h);
+      ctx.restore();
+      ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.lineWidth = 1; ctx.stroke();
+    } else {
+      ctx.fillStyle = s.fill; ctx.fill();
+      ctx.strokeStyle = s.edge; ctx.lineWidth = 1; ctx.stroke();
+    }
     /* грань осколка вспыхивает, когда он повернулся к свету */
     var flare = Math.pow(Math.max(0, Math.sin(s.rot*1.3)), 6);
     if (flare > 0.05){
@@ -1482,6 +1949,76 @@ function drawPops(){
   ctx.restore();
 }
 
+/* Коктейль в бокале-купе с трубочкой и зонтиком. Рисуется в 20-юнитной
+   сетке и масштабируется до s — один рисунок для таблички, рекордов и итогов. */
+var COCKTAIL_AT = { x: 214, y: 33 };
+function drawCocktail(x, y, s){
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(s/20, s/20);
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  /* трубочка — за бокалом */
+  ctx.strokeStyle = "#ff4d6d"; ctx.lineWidth = 2.2;
+  ctx.beginPath(); ctx.moveTo(4, 4); ctx.lineTo(11, -20); ctx.stroke();
+  /* зонтик */
+  ctx.save();
+  ctx.strokeStyle = "#f3e2c0"; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(-3, 2); ctx.lineTo(-9, -15); ctx.stroke();
+  ctx.translate(-9, -15); ctx.rotate(-0.35);
+  var uc = ["#ffd34d", "#ff5fa0", "#4fd1ff", "#ff8a3d"];
+  for (var k=0;k<4;k++){
+    ctx.fillStyle = uc[k];
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.arc(0, 0, 9, Math.PI + k*Math.PI/4, Math.PI + (k+1)*Math.PI/4);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.strokeStyle = "rgba(60,20,10,.35)"; ctx.lineWidth = 0.8;
+  ctx.beginPath(); ctx.arc(0, 0, 9, Math.PI, 0); ctx.stroke();
+  ctx.restore();
+  /* напиток в чаше */
+  ctx.beginPath();
+  ctx.moveTo(-16, -8); ctx.quadraticCurveTo(-15, 8, 0, 10); ctx.quadraticCurveTo(15, 8, 16, -8);
+  ctx.closePath();
+  var dg = ctx.createLinearGradient(0, -8, 0, 10);
+  dg.addColorStop(0, "#ffc24d"); dg.addColorStop(1, "#ff3f7f");
+  ctx.fillStyle = dg; ctx.fill();
+  ctx.fillStyle = "rgba(255,245,225,.75)";
+  ctx.fillRect(-15.5, -8, 31, 2.2);
+  /* стекло: контур, ножка, основание */
+  ctx.strokeStyle = "rgba(235,250,255,.9)"; ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(-16, -8); ctx.quadraticCurveTo(-15, 8, 0, 10); ctx.quadraticCurveTo(15, 8, 16, -8);
+  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(0, 19); ctx.stroke();
+  ctx.fillStyle = "rgba(235,250,255,.85)";
+  ctx.beginPath(); ctx.ellipse(0, 20, 7, 1.8, 0, 0, 6.283); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(-11, -4); ctx.quadraticCurveTo(-10, 3, -5, 6); ctx.stroke();
+  /* долька лайма на краю */
+  ctx.fillStyle = "#9be25a";
+  ctx.beginPath(); ctx.arc(15, -9, 4.5, 0, 6.283); ctx.fill();
+  ctx.strokeStyle = "#3f8f1f"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.strokeStyle = "rgba(240,255,220,.9)"; ctx.lineWidth = 0.6;
+  for (k=0;k<3;k++){
+    var a = k*2.094;
+    ctx.beginPath(); ctx.moveTo(15, -9); ctx.lineTo(15 + Math.cos(a)*3.6, -9 + Math.sin(a)*3.6); ctx.stroke();
+  }
+  ctx.restore();
+}
+/* летящие к табличке коктейли: дуга вверх, по дороге уменьшаются */
+function drawFlyers(){
+  for (var i=0;i<S.flyers.length;i++){
+    var f = S.flyers[i], t = f.t, e = t*t*(3 - 2*t);
+    var x = f.x + (COCKTAIL_AT.x - f.x)*e;
+    var y = f.y + (COCKTAIL_AT.y - f.y)*e - Math.sin(t*Math.PI)*90;
+    var s = 13 + 30*Math.sin(Math.min(1, t*1.6)*Math.PI*0.5)*(1 - e);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, t*6);
+    ctx.shadowColor = "rgba(255,200,120,.8)"; ctx.shadowBlur = 14;
+    drawCocktail(x, y, s);
+    ctx.restore();
+  }
+}
+
 /* деревянная табличка — на ней висят счёт и запас фруктов */
 function sign(x, y, w, h){
   ctx.save();
@@ -1518,13 +2055,17 @@ function drawHud(){
   ctx.strokeText(String(S.left), W - 68, 50);
   ctx.fillText(String(S.left), W - 68, 50);
 
-  if (S.melons > 0){
-    sign(200, 12, 80, 40);
-    drawFruit(TOP, 222, 32, 11, 0, 1, 0);
-    ctx.font = "700 16px \"Trebuchet MS\", system-ui, sans-serif";
-    ctx.textAlign = "left"; ctx.fillStyle = "#e4ffe0";
-    ctx.fillText("x" + S.melons, 238, 38);
-  }
+  /* счёт коктейлей: долетевшие до таблички, летящие ещё не считаем */
+  sign(190, 8, 100, 48);
+  drawCocktail(COCKTAIL_AT.x, COCKTAIL_AT.y, 13);
+  var shown = S.cocktails - S.flyers.length, bump = 1 + S.cocktailBump*0.9;
+  ctx.save();
+  ctx.translate(250, 41); ctx.scale(bump, bump);
+  ctx.font = "700 20px \"Trebuchet MS\", system-ui, sans-serif";
+  ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "rgba(40,16,4,.6)";
+  ctx.strokeText("x" + shown, 0, 0);
+  ctx.fillStyle = S.cocktailBump > 0 ? "#ffd6ea" : "#fff"; ctx.fillText("x" + shown, 0, 0);
+  ctx.restore();
   ctx.restore();
 }
 
@@ -1541,7 +2082,7 @@ function drawLadderRaw(){
   var x = b.x + b.w/2 - total/2, cy = b.y + b.h/2 + 2;
   for (i=0;i<TOP;i++){
     var r = rs[i], cx = x + r;
-    drawFruit(i+1, cx, cy, r, 0, 1, 0);
+    drawFruitIcon(i+1, cx, cy, r*2.3, 1);
     if (i < TOP-1){
       ctx.globalAlpha = 0.5; ctx.fillStyle = "#ffd9a0";
       ctx.font = "600 11px system-ui, sans-serif"; ctx.textAlign = "center";
@@ -1573,7 +2114,7 @@ function drawCounterUi(){
   ctx.fillStyle = "rgba(255,220,160,.7)";
   ctx.fillText("СЛЕДУЮЩИЙ", B.x + B.w/2, B.y + B.h - 6);
   var nt = S.queue[1];
-  drawFruit(nt, B.x + B.w/2, B.y + 28, Math.min(14, FRUITS[nt].r), 0, 0.95, 0);
+  drawFruitIcon(nt, B.x + B.w/2, B.y + 26, 36, 0.95);
 
   roundBtn(BTN_SOUND);
   ctx.font = "700 12px system-ui, sans-serif"; ctx.fillStyle = "#ffe0b0";
@@ -1665,7 +2206,7 @@ function drawRecords(){
     ctx.fillStyle = "rgba(255,215,160,.6)";
     ctx.fillText(r.n + " " + plural(r.n, "фрукт", "фрукта", "фруктов"), 152, y + 24);
 
-    drawFruit(TOP, 258, y + 19, 9, 0, 1, 0);
+    drawCocktail(258, y + 18, 9);
     ctx.font = "700 12px \"Trebuchet MS\", system-ui, sans-serif";
     ctx.fillStyle = "#e4ffe0"; ctx.fillText("x" + r.d, 270, y + 24);
 
@@ -1699,10 +2240,10 @@ function drawOverlay(){
   ctx.font = "700 58px \"Trebuchet MS\", system-ui, sans-serif";
   ctx.fillStyle = "#ffe9a8"; ctx.fillText(String(S.score), 240, 360);
 
-  drawFruit(TOP, 158, 408, 18, 0, 1, 0.4);
+  drawCocktail(158, 406, 17);
   ctx.font = "700 22px \"Trebuchet MS\", system-ui, sans-serif";
   ctx.fillStyle = "#e4ffe0"; ctx.textAlign = "left";
-  ctx.fillText("x " + S.melons, 184, 416);
+  ctx.fillText("x " + S.cocktails, 184, 416);
   drawFruit(0, 278, 408, 18, 0, 1, 0.45);
   ctx.fillStyle = "#ffe9a8";
   ctx.fillText("x " + S.crates, 304, 416);
@@ -1753,8 +2294,8 @@ function frame(now){
     for (i=0;i<S.gems.length;i++){
       g = S.gems[i];
       if (g.state !== "live" || g.tier === 0) continue;
-      if (Math.abs(g.vx) + Math.abs(g.vy) > 45) continue;
-      if (g.y - g.r < DANGER_Y){ above = true; break; }
+      if (g.rs > 40) continue;          /* реальная скорость, а не vx/vy — см. physics() */
+      if (topOf(g) < DANGER_Y){ above = true; break; }
     }
     S.danger = above ? S.danger + dt : 0;
     if (S.danger > DANGER_HOLD) endGame(REASON_OVERFLOW);
@@ -1767,7 +2308,7 @@ function frame(now){
     var busy = false;
     for (var k=0;k<S.gems.length;k++){
       var q = S.gems[k];
-      if (q.state !== "live" || Math.abs(q.vx)+Math.abs(q.vy) > 30){ busy = true; break; }
+      if (q.state !== "live" || q.rs > 30){ busy = true; break; }
     }
     S.settle = busy ? 0 : S.settle + dt;
     S.endWait += dt;
@@ -1785,7 +2326,11 @@ function frame(now){
   blit(JUG_BACK);
   drawDangerLine();
   drawGuide();
+  /* листья и хвостики не толкаются и могли бы торчать сквозь стекло —
+     обрезаем рисунок фруктов по стенкам кувшина (выше края — без обрезки) */
+  ctx.save(); jugClip(); ctx.clip();
   for (var j=0;j<S.gems.length;j++) drawFruitObj(S.gems[j]);
+  ctx.restore();
   drawShards();
   blit(JUG_FRONT);
   drawDropper();
@@ -1794,6 +2339,7 @@ function frame(now){
   ctx.restore();
 
   drawHud();
+  drawFlyers();
   drawCounterUi();
 
   if (S.flash > 0.02){
@@ -1909,6 +2455,8 @@ if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0){
 buildSprites();
 buildScene();
 LADDER = bake(LADDER_BOX.x, LADDER_BOX.y, LADDER_BOX.w, LADDER_BOX.h, drawLadderRaw);
+loadFruitArt();
+loadSceneArt();
 reset();
 requestAnimationFrame(frame);
 </script>
