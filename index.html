@@ -71,7 +71,7 @@ var FRUITS = [
   { name:"Клубника", r:30, c:[255,58,78],   d:[140,10,30],  l:[255,195,205] },
   { name:"Лайм",     r:38, c:[140,226,60],  d:[38,108,18],  l:[225,255,185] },
   { name:"Апельсин", r:48, c:[255,150,30],  d:[168,66,0],   l:[255,228,165] },
-  { name:"Манго",    r:58, c:[255,198,48],  d:[196,88,18],  l:[255,242,185] },
+  { name:"Драгонфрукт", r:58, c:[255,62,150], d:[150,0,80], l:[255,200,232] },
   { name:"Ананас",   r:71, c:[255,192,58],  d:[150,92,8],   l:[255,242,195] },
   { name:"Арбуз",    r:89, c:[72,192,82],   d:[14,78,28],   l:[205,255,205] }
 ];
@@ -661,7 +661,7 @@ function bodyBox(tier, r){
   switch(tier){
     case 2: return [0, 0.06*r, 0.92*r, 0.9*r];
     case 3: return [0, 0, r, 0.9*r];
-    case 5: return [0, 0, 0.97*r, 0.88*r];
+    case 5: return [0, 0.04*r, 0.78*r, 0.94*r];
     case 6: return [0, 0.2*r, 0.76*r, 0.8*r];
     default: return [0, 0, r, r];
   }
@@ -678,7 +678,7 @@ function bodyPath(tier, r){
   } else if (tier === 3){
     ctx.ellipse(0, 0, r, 0.9*r, 0, 0, 6.283);
   } else if (tier === 5){
-    ctx.ellipse(0, 0, 0.97*r, 0.88*r, -0.45, 0, 6.283);
+    ctx.ellipse(0, 0.04*r, 0.78*r, 0.94*r, 0, 0, 6.283);
   } else if (tier === 6){
     ctx.ellipse(0, 0.2*r, 0.76*r, 0.8*r, 0, 0, 6.283);
   } else {
@@ -708,6 +708,68 @@ function dots(r, n, color, size, box){
     ctx.arc(box[0] + Math.cos(a)*q*box[2], box[1] + Math.sin(a)*q*box[3], size*(0.6+Math.random()*0.6), 0, 6.283);
     ctx.fill();
   }
+}
+
+/* мягкое пятно цвета, тающее к краю */
+function spot(x, y, rad, col){
+  var g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+  g.addColorStop(0, col); g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g; ctx.fillRect(x - rad, y - rad, 2*rad, 2*rad);
+}
+/* пузырьки воздуха, застывшие в стекле */
+function bubbles(box, n){
+  for (var i=0;i<n;i++){
+    var a = Math.random()*6.283, q = 0.2 + Math.random()*0.6;
+    var x = box[0] + Math.cos(a)*q*box[2], y = box[1] + Math.sin(a)*q*box[3];
+    var s = Math.max(1.2, Math.min(box[2], box[3]) * (0.025 + Math.random()*0.04));
+    ctx.beginPath(); ctx.arc(x, y, s, 0, 6.283);
+    ctx.fillStyle = "rgba(255,255,255,.10)"; ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 0.8; ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,.9)";
+    ctx.beginPath(); ctx.arc(x - s*0.35, y - s*0.35, s*0.3, 0, 6.283); ctx.fill();
+  }
+}
+/* дольки цитруса внутри и светлый слой под кожурой */
+function citrus(box, n, d){
+  var cx = box[0], cy = box[1], rx = box[2]*0.66, ry = box[3]*0.66, i;
+  for (i=0;i<n;i++){
+    var a0 = i*6.283/n, a1 = (i+1)*6.283/n;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos((a0+a1)/2)*rx*0.1, cy + Math.sin((a0+a1)/2)*ry*0.1);
+    ctx.ellipse(cx, cy, rx, ry, 0, a0 + 0.07, a1 - 0.07);
+    ctx.closePath();
+    ctx.fillStyle = rgba(d.l, (i % 2) ? 0.16 : 0.26); ctx.fill();
+    ctx.strokeStyle = rgba(d.l, 0.42); ctx.lineWidth = 1; ctx.stroke();
+  }
+  ctx.strokeStyle = rgba(d.l, 0.26); ctx.lineWidth = Math.max(1.5, box[2]*0.06);
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx*1.1, ry*1.1, 0, 0, 6.283); ctx.stroke();
+}
+/* пористая кожура: тёмная ямка и блик сверху-слева у каждой поры */
+function peel(box, n, d, s){
+  for (var i=0;i<n;i++){
+    var a = Math.random()*6.283, q = Math.sqrt(Math.random());
+    var x = box[0] + Math.cos(a)*q*box[2], y = box[1] + Math.sin(a)*q*box[3];
+    ctx.fillStyle = rgba(d.d, 0.24); ctx.beginPath(); ctx.arc(x, y, s, 0, 6.283); ctx.fill();
+    ctx.fillStyle = rgba(d.l, 0.32); ctx.beginPath(); ctx.arc(x - s*0.4, y - s*0.4, s*0.5, 0, 6.283); ctx.fill();
+  }
+}
+/* чешуйка драгонфрукта: широкий плоский «язычок пламени», кончик загнут вбок (curl = ±1) */
+function bract(x, y, len, w, ang, curl){
+  var tx = curl*len*0.22;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+  ctx.beginPath(); ctx.moveTo(-w, 0);
+  ctx.quadraticCurveTo(-w*0.95, -len*0.62, tx, -len);
+  ctx.quadraticCurveTo(w*0.6, -len*0.5, w, 0);
+  ctx.quadraticCurveTo(0, -len*0.12, -w, 0);
+  ctx.closePath();
+  var g = ctx.createLinearGradient(0, 0, tx, -len);
+  g.addColorStop(0, "rgba(200,20,110,.92)"); g.addColorStop(0.5, "rgba(255,95,170,.9)");
+  g.addColorStop(0.82, "rgba(235,200,110,.92)"); g.addColorStop(1, "rgba(170,225,80,.96)");
+  ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = "rgba(110,0,55,.55)"; ctx.lineWidth = 0.9; ctx.stroke();
+  ctx.strokeStyle = "rgba(255,230,245,.5)"; ctx.lineWidth = 0.8;
+  ctx.beginPath(); ctx.moveTo(0, -len*0.1); ctx.quadraticCurveTo(-w*0.1, -len*0.55, tx*0.8, -len*0.85); ctx.stroke();
+  ctx.restore();
 }
 
 function drawFruitBody(tier, r){
@@ -740,35 +802,78 @@ function drawFruitBody(tier, r){
   ctx.save();
   bodyPath(tier, r); ctx.clip();
   ctx.shadowColor = "rgba(0,0,0,0)";
-  if (tier === 2){
-    ctx.fillStyle = "rgba(255,240,150,.8)";
+  if (tier === 1){
+    /* шов от ямки стебля вниз по боку и тень в самой ямке */
+    ctx.lineCap = "round";
+    ctx.strokeStyle = rgba(d.d, 0.4); ctx.lineWidth = 0.07*r;
+    ctx.beginPath(); ctx.moveTo(0.02*r,-0.78*r); ctx.bezierCurveTo(0.38*r,-0.4*r, 0.42*r,0.35*r, 0.12*r,0.86*r); ctx.stroke();
+    ctx.strokeStyle = rgba(d.l, 0.32); ctx.lineWidth = 0.03*r;
+    ctx.beginPath(); ctx.moveTo(-0.04*r,-0.74*r); ctx.bezierCurveTo(0.31*r,-0.38*r, 0.35*r,0.33*r, 0.06*r,0.84*r); ctx.stroke();
+    ctx.lineCap = "butt";
+    spot(0, -0.82*r, 0.34*r, rgba(d.d, 0.55));
+    bubbles(box, 3);
+  } else if (tier === 2){
+    /* светлые «плечики» под чашелистиком и семечки в ямках */
+    spot(0, -0.62*r, 0.62*r, "rgba(255,235,235,.35)");
     for (k=-3;k<=3;k++) for (m=-2;m<=2;m++){
       var sx = m*0.36*r + ((k & 1) ? 0.18*r : 0), sy = k*0.27*r + 0.12*r;
-      ctx.beginPath(); ctx.ellipse(sx, sy, 0.045*r, 0.08*r, 0, 0, 6.283); ctx.fill();
+      ctx.fillStyle = rgba(d.d, 0.5);
+      ctx.beginPath(); ctx.ellipse(sx, sy + 0.02*r, 0.07*r, 0.11*r, 0, 0, 6.283); ctx.fill();
+      ctx.fillStyle = "rgba(255,236,140,.92)";
+      ctx.beginPath(); ctx.ellipse(sx, sy - 0.01*r, 0.04*r, 0.075*r, 0, 0, 6.283); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,.75)";
+      ctx.beginPath(); ctx.arc(sx - 0.012*r, sy - 0.045*r, 0.016*r, 0, 6.283); ctx.fill();
     }
-  } else if (tier === 3){
-    dots(r, 46, rgba(d.d, 0.25), 0.03*r, box);
-    dots(r, 30, rgba(d.l, 0.3), 0.025*r, box);
-  } else if (tier === 4){
-    dots(r, 70, rgba(d.d, 0.22), 0.025*r, box);
-    dots(r, 40, rgba(d.l, 0.28), 0.02*r, box);
+    bubbles(box, 3);
+  } else if (tier === 3 || tier === 4){
+    /* дольки внутри видны сквозь стекло, кожура в мелких порах */
+    citrus(box, tier === 3 ? 9 : 11, d);
+    peel(box, tier === 3 ? 90 : 150, d, (tier === 3 ? 0.03 : 0.022)*r);
+    bubbles(box, 5);
   } else if (tier === 5){
-    var bl = ctx.createRadialGradient(0.35*r,-0.4*r,0.05*r, 0.35*r,-0.4*r,0.75*r);
-    bl.addColorStop(0, "rgba(255,70,60,.55)"); bl.addColorStop(1, "rgba(255,70,60,0)");
-    ctx.fillStyle = bl; ctx.fillRect(-r, -r, 2*r, 2*r);
+    /* драгонфрукт: сквозь розовое стекло просвечивает белая мякоть в чёрных семечках */
+    var fl = ctx.createRadialGradient(0, bx, 0.05*r, 0, bx, 0.66*r);
+    fl.addColorStop(0, "rgba(255,255,255,.5)"); fl.addColorStop(0.75, "rgba(255,240,248,.32)"); fl.addColorStop(1, "rgba(255,240,248,0)");
+    ctx.fillStyle = fl; ctx.beginPath(); ctx.ellipse(0, bx, 0.62*r, 0.7*r, 0, 0, 6.283); ctx.fill();
+    ctx.fillStyle = "rgba(30,8,24,.62)";
+    for (i=0;i<80;i++){
+      var sa = Math.random()*6.283, sq = Math.sqrt(Math.random());
+      ctx.beginPath();
+      ctx.ellipse(Math.cos(sa)*sq*0.52*r, bx + Math.sin(sa)*sq*0.6*r, 0.022*r, 0.034*r, sa, 0, 6.283);
+      ctx.fill();
+    }
+    bubbles(box, 4);
   } else if (tier === 6){
-    var s = 0.3*r;
+    /* ромбики-«глазки» с тенью снизу и колючкой, поверх — сетка */
+    var s = 0.3*r, h = s/2*0.9;
+    for (k=-6;k<=6;k++) for (m=-6;m<=6;m++){
+      var ex = (k+m+1)*s/2, ey = bx + (m-k)*s/2;
+      if (Math.abs(ex) > r || Math.abs(ey - bx) > r) continue;
+      ctx.beginPath(); ctx.moveTo(ex, ey - h); ctx.lineTo(ex + h, ey); ctx.lineTo(ex, ey + h); ctx.lineTo(ex - h, ey); ctx.closePath();
+      var cg2 = ctx.createLinearGradient(0, ey - h, 0, ey + h);
+      cg2.addColorStop(0, rgba(d.l, 0.4)); cg2.addColorStop(1, rgba(d.d, 0.3));
+      ctx.fillStyle = cg2; ctx.fill();
+      ctx.strokeStyle = rgba(d.d, 0.75); ctx.lineWidth = 1.1;
+      ctx.beginPath(); ctx.arc(ex, ey + s*0.06, s*0.14, 0.2*Math.PI, 0.8*Math.PI); ctx.stroke();
+      ctx.strokeStyle = rgba(d.l, 0.85); ctx.lineWidth = 0.9;
+      ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex + s*0.04, ey - s*0.22); ctx.stroke();
+    }
     ctx.strokeStyle = rgba(d.d, 0.6); ctx.lineWidth = 1.4;
     for (k=-7;k<=7;k++){
       ctx.beginPath(); ctx.moveTo(k*s - 1.5*r, bx - 1.5*r); ctx.lineTo(k*s + 1.5*r, bx + 1.5*r); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(k*s + 1.5*r, bx - 1.5*r); ctx.lineTo(k*s - 1.5*r, bx + 1.5*r); ctx.stroke();
     }
-    ctx.fillStyle = rgba(d.l, 0.6);
-    for (k=-6;k<=6;k++) for (m=-6;m<=6;m++){
-      if ((k + m) & 1) continue;
-      ctx.beginPath(); ctx.arc((k+m)*s/2, bx + (m-k)*s/2 + s*0.5, 0.045*r, 0, 6.283); ctx.fill();
-    }
+    bubbles(box, 4);
   } else if (tier === 7){
+    /* под коркой просвечивают красная мякоть и кольцо косточек */
+    spot(0, 0.04*r, 0.72*r, "rgba(255,60,90,.48)");
+    ctx.fillStyle = "rgba(35,10,12,.55)";
+    for (i=0;i<12;i++){
+      var wa = i*6.283/12 + 0.2, wr = (0.4 + (i % 2)*0.1)*r;
+      ctx.beginPath(); ctx.ellipse(Math.cos(wa)*wr, Math.sin(wa)*wr, 0.06*r, 0.034*r, wa, 0, 6.283); ctx.fill();
+    }
+    dots(r, 90, rgba(d.l, 0.16), 0.035*r, box);
+    bubbles(box, 6);
     ctx.strokeStyle = rgba(d.d, 0.72); ctx.lineWidth = 0.12*r; ctx.lineJoin = "round";
     for (k=-3;k<=3;k++){
       ctx.beginPath();
@@ -806,8 +911,15 @@ function drawFruitBody(tier, r){
     ctx.beginPath(); ctx.ellipse(0, -0.9*r, 0.1*r, 0.05*r, 0, 0, 6.283); ctx.fill();
     glassLeaf(0.02*r, -0.92*r, 0.42*r, 0.14*r, 1.05);
   } else if (tier === 5){
-    ctx.fillStyle = "rgba(120,70,20,.8)";
-    ctx.beginPath(); ctx.arc(-0.62*r, -0.55*r, 0.06*r, 0, 6.283); ctx.fill();
+    /* чешуйки лежат на кожуре, смотрят в основном вверх и чуть наружу,
+       кончики загнуты от центра — снизу вверх, чтобы верхние ложились поверх нижних */
+    var BR = [[-0.2,0.8],[0.34,0.78],[-0.56,0.44],[0.1,0.42],[0.6,0.4],[-0.62,0.02],[-0.06,-0.04],[0.56,-0.02],[-0.36,-0.42],[0.32,-0.44]];
+    for (i=0;i<BR.length;i++){
+      var px = BR[i][0]*r, py = (BR[i][1] + 0.04)*r, pl = Math.sqrt(px*px + py*py) || 1;
+      var ddx = px/pl*0.4, ddy = py/pl*0.4 - 1, dl = Math.sqrt(ddx*ddx + ddy*ddy);
+      bract(px, py, 0.36*r, 0.19*r, Math.atan2(ddx/dl, -ddy/dl), px < 0 ? -1 : 1);
+    }
+    for (i=-1;i<=1;i++) bract(i*0.12*r, -0.8*r, 0.3*r, 0.13*r, i*0.6, i || 1);
   } else if (tier === 7){
     ctx.fillStyle = "rgba(110,120,40,.85)";
     ctx.beginPath(); ctx.ellipse(0, -0.97*r, 0.07*r, 0.04*r, 0, 0, 6.283); ctx.fill();
