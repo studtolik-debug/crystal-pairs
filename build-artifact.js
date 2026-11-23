@@ -23,7 +23,7 @@ if (!swBlock.test(inner)) {
 }
 inner = inner.replace(swBlock, "");
 
-const out = "<title>Самоцветы</title>\n" + style[0] + "\n" + inner.trim() + "\n";
+const out = "<title>Фруктовый кувшин</title>\n" + style[0] + "\n" + inner.trim() + "\n";
 
 // страховка: ничего лишнего не утекло
 for (const bad of ["<!doctype", "<html", "<head", "<body", "manifest.webmanifest", "serviceWorker"]) {

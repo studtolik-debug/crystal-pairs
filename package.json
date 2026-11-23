@@ -2,7 +2,7 @@
   "name": "gems-merge",
   "version": "1.0.0",
   "private": true,
-  "description": "Самоцветы — слияние камней",
+  "description": "Фруктовый кувшин — стеклянные фрукты в тропическом баре",
   "scripts": {
     "serve": "python -m http.server 8080 --bind 0.0.0.0",
     "www": "node build-www.js",

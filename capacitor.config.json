@@ -1,9 +1,9 @@
 {
   "appId": "ru.samotsvety.gems",
-  "appName": "Самоцветы",
+  "appName": "Фруктовый кувшин",
   "webDir": "www",
   "android": {
-    "backgroundColor": "#0a0713",
+    "backgroundColor": "#1a0d08",
     "allowMixedContent": false
   },
   "server": {
