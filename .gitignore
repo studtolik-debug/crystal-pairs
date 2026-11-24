@@ -1,7 +1,8 @@
 # зависимости и сборочные артефакты — в репозитории не нужны
 node_modules/
-android/
-www/
+/android/
+/www/
+# только корневые папки: native/android/ с правками нативного кода — в git
 
 # исходники картинок: в игре — уменьшенные копии в img/ и scene/background.jpg
 fruits/

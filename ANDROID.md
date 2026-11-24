@@ -93,6 +93,12 @@ android/app/build/outputs/apk/debug/app-debug.apk
 `npm run android:apk` сам перекладывает файлы в `www/` скриптом
 `build-www.js`, так что копии не разъезжаются.
 
+Папка `android/` в git не хранится. Правки нативного кода лежат в
+`native/android/` по тем же путям (сейчас это `MainActivity.java`: игра
+во весь экран, без строки состояния и панели навигации). Скрипт
+`apply-native.js` накладывает их после `cap sync`, его зовут
+`android:add`, `android:sync` и `android:apk`.
+
 Если менялись файлы, а телефон показывает старую версию — поднять версию
 кэша в `sw.js` (строка `const CACHE = "gems-v1"`).
 

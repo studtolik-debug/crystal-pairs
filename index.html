@@ -23,6 +23,8 @@
     touch-action:none;
     border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.75),0 0 0 1px rgba(255,200,140,.14);
     cursor:pointer;}
+  /* канва достроена до пропорций экрана и занимает его целиком (см. fitView) */
+  canvas.full{border-radius:0;box-shadow:none;}
 </style>
 </head>
 <body>
@@ -171,8 +173,25 @@ var SHAPES = [];
 var cv = document.getElementById("game");
 var ctx = cv.getContext("2d");
 var DPR = Math.min(2, window.devicePixelRatio || 1);
-cv.width = W * DPR; cv.height = H * DPR;
-ctx.setTransform(DPR,0,0,DPR,0,0);
+/* Игровое поле всегда 480x800, но телефоны вытянутее 3:5, и сверху и снизу
+   оставались пустые полосы. На высоком экране канва растёт до VH игровых
+   единиц, поле стоит посередине (OY — высота полосы над ним), а полосы
+   достраиваются из краёв фона (bakeExt). На широком экране всё как было. */
+var VH = H, OY = 0;
+var VH_MAX = 1200;                  /* вытянутее ~2.5:1 — снова поля сверху и снизу */
+function fitView(force){
+  var w = window.innerWidth, h = window.innerHeight, vh = H;
+  if (w > 0 && h > 0) vh = Math.max(H, Math.min(VH_MAX, W*h/w));
+  if (!force && Math.abs(vh - VH) < 0.5) return;
+  VH = vh; OY = (VH - H)/2;
+  cv.width = Math.round(W*DPR); cv.height = Math.round(VH*DPR);
+  cv.className = VH > H + 0.5 ? "full" : "";
+  ctx.setTransform(DPR,0,0,DPR,0,OY*DPR);
+  bakeExt();
+}
+/* весь экран в игровых координатах — для затемнений и вспышек */
+function fillView(){ ctx.fillRect(0, -OY, W, VH); }
+fitView(true);
 
 function rgba(c, a){ return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")"; }
 
@@ -1728,6 +1747,7 @@ function loadSceneArt(){
       ctx.beginPath(); ctx.arc(0, 0, 170, 0, 6.283); ctx.fill(); ctx.restore();
       drawRail();
     });
+    bakeExt();
     BULBS = [];
     for (var i=0;i<BG_BULBS.length;i++){
       var b = BG_BULBS[i];
@@ -1758,6 +1778,35 @@ function loadSceneArt(){
 }
 
 var BG = null, JUG_BACK = null, JUG_FRONT = null, BULB_SPR = {};
+
+/* Полосы над и под полем на вытянутом экране (см. fitView). Берутся из уже
+   испечённого фона, поэтому подходят и к картинке, и к сцене из кода.
+   Сверху — солома с края крыши, слоями вверх; каждый слой чуть крупнее,
+   будто крыша нависает над зрителем. Снизу — нижний ряд досок стойки
+   (ниже раскосов) вытянут до края экрана. Края затемнены. */
+var EXT_TOP = null, EXT_BOT = null;
+var ROOF_BAND = 24, PLANK_FROM = 790;
+function bakeExt(){
+  EXT_TOP = EXT_BOT = null;
+  if (!BG || OY < 0.5) return;
+  var src = BG.cv, k = src.height / H, hb = VH - H - OY;
+  EXT_TOP = bake(0, -OY, W, OY, function(){
+    var y = 0, h = ROOF_BAND;
+    while (y > -OY){
+      ctx.drawImage(src, 0, 0, src.width, ROOF_BAND*k, 0, y - h, W, h);
+      y -= h; h *= 1.12;
+    }
+    var g = ctx.createLinearGradient(0, 0, 0, -OY);
+    g.addColorStop(0, "rgba(12,5,2,.1)"); g.addColorStop(1, "rgba(12,5,2,.75)");
+    ctx.fillStyle = g; ctx.fillRect(0, -OY, W, OY);
+  });
+  EXT_BOT = bake(0, H, W, hb, function(){
+    ctx.drawImage(src, 0, PLANK_FROM*k, src.width, (H - PLANK_FROM)*k, 0, H, W, hb);
+    var g = ctx.createLinearGradient(0, H, 0, H + hb);
+    g.addColorStop(0, "rgba(12,5,2,0)"); g.addColorStop(1, "rgba(12,5,2,.65)");
+    ctx.fillStyle = g; ctx.fillRect(0, H, W, hb);
+  });
+}
 function makeBulbSprites(){
   for (var i=0;i<BULBS.length;i++){
     var c = BULBS[i].c;
@@ -2145,7 +2194,7 @@ function drawRecords(){
   if (!showRecords) return;
   var P = REC_PANEL, i;
   ctx.save();
-  ctx.fillStyle = "rgba(14,6,2,.82)"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = "rgba(14,6,2,.82)"; fillView();
   panelBg(P.x, P.y, P.w, P.h);
 
   ctx.textAlign = "center";
@@ -2226,7 +2275,7 @@ var REASON_OVERFLOW = "кувшин переполнен";
 function drawOverlay(){
   if (!S.over) return;
   ctx.save();
-  ctx.fillStyle = "rgba(14,6,2,.72)"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = "rgba(14,6,2,.72)"; fillView();
   panelBg(70, 196, 340, 368);
   ctx.textAlign = "center";
   ctx.font = "700 32px \"Trebuchet MS\", system-ui, sans-serif";
@@ -2317,10 +2366,12 @@ function frame(now){
     S.settle = 0; S.endWait = 0;      /* ящик вернул фрукты — партия продолжается */
   }
 
-  ctx.setTransform(DPR,0,0,DPR,0,0);
-  ctx.fillStyle = "#140906"; ctx.fillRect(0,0,W,H);
+  ctx.setTransform(DPR,0,0,DPR,0,OY*DPR);
+  ctx.fillStyle = "#140906"; fillView();
   ctx.save();
   if (S.shake > 0.4) ctx.translate((Math.random()-0.5)*S.shake, (Math.random()-0.5)*S.shake);
+  if (EXT_TOP) blit(EXT_TOP);
+  if (EXT_BOT) blit(EXT_BOT);
   blit(BG);
   drawLights();
   blit(JUG_BACK);
@@ -2345,7 +2396,7 @@ function frame(now){
   if (S.flash > 0.02){
     ctx.save(); ctx.globalCompositeOperation = "lighter";
     ctx.fillStyle = "rgba(255,230,190," + (S.flash*0.3) + ")";
-    ctx.fillRect(0,0,W,H); ctx.restore();
+    fillView(); ctx.restore();
   }
   drawOverlay();
   drawRecords();
@@ -2367,8 +2418,9 @@ function endGame(reason){
 function toLocal(e){
   var r = cv.getBoundingClientRect();
   return { x: (e.clientX - r.left) * (W / r.width),
-           y: (e.clientY - r.top)  * (H / r.height) };
+           y: (e.clientY - r.top)  * (VH / r.height) - OY };
 }
+window.addEventListener("resize", function(){ fitView(false); });
 cv.addEventListener("pointermove", function(e){
   if (e.pointerType === "touch" && !aiming) return;   /* палец не «водит» мышью просто так */
   S.aimX = toLocal(e).x;
@@ -2454,6 +2506,7 @@ if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0){
 
 buildSprites();
 buildScene();
+bakeExt();
 LADDER = bake(LADDER_BOX.x, LADDER_BOX.y, LADDER_BOX.w, LADDER_BOX.h, drawLadderRaw);
 loadFruitArt();
 loadSceneArt();

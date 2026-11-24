@@ -6,9 +6,9 @@
   "scripts": {
     "serve": "python -m http.server 8080 --bind 0.0.0.0",
     "www": "node build-www.js",
-    "android:add": "npm run www && npx cap add android",
-    "android:sync": "npm run www && npx cap sync android",
-    "android:apk": "npm run www && npx cap sync android && cd android && gradlew.bat assembleDebug"
+    "android:add": "npm run www && npx cap add android && node apply-native.js",
+    "android:sync": "npm run www && npx cap sync android && node apply-native.js",
+    "android:apk": "npm run android:sync && cd android && gradlew.bat assembleDebug"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.1.2"
