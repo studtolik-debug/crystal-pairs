@@ -29,6 +29,9 @@
 </head>
 <body>
 <div id="wrap"><canvas id="game"></canvas></div>
+<!-- щуп для выреза под камеру и полоски «домой» на iPhone (см. fitView) -->
+<div id="safe" style="position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)"></div>
 <script>
 "use strict";
 
@@ -183,15 +186,31 @@ function fitView(force){
   var w = window.innerWidth, h = window.innerHeight, vh = H;
   if (w > 0 && h > 0) vh = Math.max(H, Math.min(VH_MAX, W*h/w));
   if (!force && Math.abs(vh - VH) < 0.5) return;
-  VH = vh; OY = (VH - H)/2;
+  VH = vh;
+  /* Таблички счёта висят у верхнего края экрана, панели — у нижнего
+     (layoutUI). Если внизу помещаются два ряда панелей, сцену ставим так,
+     чтобы просветы между ней и панелями сверху и снизу были равными;
+     иначе — посередине, как раньше. Сцена — от края крыши (y 60) до
+     переднего края стойки (y 736). */
+  var E = VH - H;
+  HUD.u = Math.min(1.3, 1 + E/300);
+  /* вырез под камеру и полоска «домой» (iPhone): CSS-пиксели -> игровые единицы.
+     На Android окно само не заходит под камеру, там они нулевые. */
+  var safe = document.getElementById("safe"), k = w > 0 ? W / w : 1;
+  SAFE_TOP = safe ? (parseFloat(getComputedStyle(safe).paddingTop) || 0) * k : 0;
+  SAFE_BOT = safe ? (parseFloat(getComputedStyle(safe).paddingBottom) || 0) * k : 0;
+  var topUI = SAFE_TOP + 8 + 52*HUD.u;
+  var bot2 = SAFE_BOT + 20 + NEXT_BOX.h*UI_BTN_U + LADDER_BOX.h*UI_LADDER_U;
+  UI_TWO_ROWS = VH >= bot2 + 742 + topUI - 60;
+  OY = UI_TWO_ROWS ? Math.max(topUI - 60, (VH - bot2 - 796 + topUI)/2) : E/2;
   cv.width = Math.round(W*DPR); cv.height = Math.round(VH*DPR);
   cv.className = VH > H + 0.5 ? "full" : "";
   ctx.setTransform(DPR,0,0,DPR,0,OY*DPR);
   bakeExt();
+  layoutUI();
 }
 /* весь экран в игровых координатах — для затемнений и вспышек */
 function fillView(){ ctx.fillRect(0, -OY, W, VH); }
-fitView(true);
 
 function rgba(c, a){ return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")"; }
 
@@ -1339,7 +1358,7 @@ function loadFruitArt(){
     im.onload = function(){
       SPRITES[t] = imageSprite(t, im);
       /* лестница запечена — перепекаем, когда пришли все картинки */
-      if (++ART_READY === ART.length - 1) LADDER = bake(LADDER_BOX.x, LADDER_BOX.y, LADDER_BOX.w, LADDER_BOX.h, drawLadderRaw);
+      if (++ART_READY === ART.length - 1) bakeLadder();
     };
     im.src = ART[t].src;
   })(t);
@@ -2059,7 +2078,7 @@ function drawFlyers(){
     var f = S.flyers[i], t = f.t, e = t*t*(3 - 2*t);
     var x = f.x + (COCKTAIL_AT.x - f.x)*e;
     var y = f.y + (COCKTAIL_AT.y - f.y)*e - Math.sin(t*Math.PI)*90;
-    var s = 13 + 30*Math.sin(Math.min(1, t*1.6)*Math.PI*0.5)*(1 - e);
+    var s = 13*HUD.u + 30*Math.sin(Math.min(1, t*1.6)*Math.PI*0.5)*(1 - e);
     ctx.save();
     ctx.globalAlpha = Math.min(1, t*6);
     ctx.shadowColor = "rgba(255,200,120,.8)"; ctx.shadowBlur = 14;
@@ -2084,32 +2103,38 @@ function sign(x, y, w, h){
   ctx.fillStyle = "#d8c39a";
   ctx.beginPath(); ctx.arc(x + 7, y + 7, 1.8, 0, 6.283); ctx.arc(x + w - 7, y + 7, 1.8, 0, 6.283); ctx.fill();
 }
-function drawHud(){
-  ctx.save();
-  sign(12, 8, 112, 52);
-  sign(W - 124, 8, 112, 52);
-  ctx.textBaseline = "alphabetic";
+/* табличка с подписью и числом; x0 — левый край относительно точки привязки */
+function hudBox(x0, label, value, color){
+  sign(x0, 0, 112, 52);
+  ctx.textAlign = "center";
   ctx.font = "600 11px \"Trebuchet MS\", system-ui, sans-serif";
   ctx.fillStyle = "rgba(255,220,160,.8)";
-  ctx.textAlign = "center";
-  ctx.fillText("ОЧКИ", 68, 24);
-  ctx.fillText("ФРУКТЫ", W - 68, 24);
+  ctx.fillText(label, x0 + 56, 16);
   ctx.font = "700 25px \"Trebuchet MS\", system-ui, sans-serif";
   ctx.lineWidth = 3; ctx.strokeStyle = "rgba(40,16,4,.6)";
-  ctx.strokeText(String(S.score), 68, 50);
-  ctx.fillStyle = "#fff"; ctx.fillText(String(S.score), 68, 50);
+  ctx.strokeText(value, x0 + 56, 42);
+  ctx.fillStyle = color; ctx.fillText(value, x0 + 56, 42);
+}
+/* Таблички висят у верхнего края экрана (HUD.y) и крупнеют в HUD.u раз:
+   левая прижата к левому краю, правая — к правому, коктейли — по центру. */
+function drawHud(){
+  var u = HUD.u;
+  ctx.save();
+  ctx.textBaseline = "alphabetic";
+  ctx.save(); ctx.translate(12, HUD.y); ctx.scale(u, u);
+  hudBox(0, "ОЧКИ", String(S.score), "#fff");
+  ctx.restore();
   /* прибавка из ящика подсвечивается, чтобы её было видно на счётчике */
-  var fresh = S.crateFlash > 0;
-  ctx.fillStyle = fresh ? "#ffe07a" : (S.left <= 5 ? "#ff9a8a" : "#fff");
-  ctx.strokeText(String(S.left), W - 68, 50);
-  ctx.fillText(String(S.left), W - 68, 50);
+  ctx.save(); ctx.translate(W - 12, HUD.y); ctx.scale(u, u);
+  hudBox(-112, "ФРУКТЫ", String(S.left), S.crateFlash > 0 ? "#ffe07a" : (S.left <= 5 ? "#ff9a8a" : "#fff"));
+  ctx.restore();
 
   /* счёт коктейлей: долетевшие до таблички, летящие ещё не считаем */
-  sign(190, 8, 100, 48);
-  drawCocktail(COCKTAIL_AT.x, COCKTAIL_AT.y, 13);
+  ctx.save(); ctx.translate(W/2, HUD.y); ctx.scale(u, u);
+  sign(-50, 0, 100, 48);
+  drawCocktail(-26, 25, 13);
   var shown = S.cocktails - S.flyers.length, bump = 1 + S.cocktailBump*0.9;
-  ctx.save();
-  ctx.translate(250, 41); ctx.scale(bump, bump);
+  ctx.translate(10, 33); ctx.scale(bump, bump);
   ctx.font = "700 20px \"Trebuchet MS\", system-ui, sans-serif";
   ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "rgba(40,16,4,.6)";
   ctx.strokeText("x" + shown, 0, 0);
@@ -2141,14 +2166,62 @@ function drawLadderRaw(){
   }
 }
 
-var BTN_SOUND = { x: 44, y: 762, r: 19 };
-var BTN_REC   = { x: 94, y: 762, r: 19 };
-var NEXT_BOX  = { x: 394, y: 732, w: 74, h: 60 };
+var BTN_SOUND = { x: 44, y: 762, r: 19, u: 1 };
+var BTN_REC   = { x: 94, y: 762, r: 19, u: 1 };
+var NEXT_BOX  = { x: 394, y: 732, w: 74, h: 60, u: 1 };
 
-function roundBtn(b){
-  ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 6.283);
+/* ---- раскладка панелей ----
+   Экран в игровых координатах — от -OY до VH-OY (см. fitView). Таблички
+   счёта прижаты к его верху, кнопки, лестница и «следующий» — к низу.
+   Чем длиннее экран, тем крупнее таблички; если снизу хватает места,
+   лестница фруктов встаёт отдельным рядом над кнопками и «следующим». */
+var HUD = { y: 8, u: 1 };            /* u считает fitView: от него зависит место сцены */
+var LADDER_AT = { x: 128, y: 738, u: 1 };
+var UI_BTN_U = 1.3, UI_LADDER_U = 1.4, UI_TWO_ROWS = false;
+var SAFE_TOP = 0, SAFE_BOT = 0;      /* игровые единицы, считает fitView */
+function setBtn(b, x, y, u){ b.x = x; b.y = y; b.u = u; b.r = 19*u; }
+function layoutUI(){
+  var top = -OY + SAFE_TOP, bot = VH - OY - SAFE_BOT;
+  HUD.y = top + 8;
+  COCKTAIL_AT.x = W/2 - 26*HUD.u;   /* сюда летят коктейли — центр бокала на табличке */
+  COCKTAIL_AT.y = HUD.y + 25*HUD.u;
+
+  var bu = UI_BTN_U, lu = UI_LADDER_U, B = NEXT_BOX;
+  if (UI_TWO_ROWS){
+    B.u = bu; B.x = W - 12 - B.w*bu; B.y = bot - 10 - B.h*bu;
+    var cy = B.y + B.h*bu/2, r = 19*bu;
+    setBtn(BTN_SOUND, 12 + r, cy, bu);
+    setBtn(BTN_REC, 12 + 3*r + 12, cy, bu);
+    LADDER_AT.u = lu;
+    LADDER_AT.x = W/2 - LADDER_BOX.w*lu/2;
+    LADDER_AT.y = B.y - 10 - LADDER_BOX.h*lu;
+  } else {
+    /* места мало — один ряд, как задумано для 3:5, просто у нижнего края */
+    var dy = bot - H;
+    B.u = 1; B.x = 394; B.y = 732 + dy;
+    setBtn(BTN_SOUND, 44, 762 + dy, 1);
+    setBtn(BTN_REC, 94, 762 + dy, 1);
+    LADDER_AT.u = 1; LADDER_AT.x = LADDER_BOX.x; LADDER_AT.y = LADDER_BOX.y + dy;
+  }
+  bakeLadder();
+}
+function bakeLadder(){
+  var L = LADDER_AT, b = LADDER_BOX;
+  LADDER = bake(L.x, L.y, b.w*L.u, b.h*L.u, function(){
+    ctx.translate(L.x, L.y); ctx.scale(L.u, L.u); ctx.translate(-b.x, -b.y);
+    drawLadderRaw();
+  });
+}
+
+/* круглая кнопка: рисуется в своей точке и масштабе, icon() — в её центре */
+function roundBtn(b, icon){
+  ctx.save();
+  ctx.translate(b.x, b.y); ctx.scale(b.u, b.u);
+  ctx.beginPath(); ctx.arc(0, 0, 19, 0, 6.283);
   ctx.fillStyle = "rgba(25,12,4,.62)"; ctx.fill();
   ctx.strokeStyle = "rgba(255,210,150,.4)"; ctx.lineWidth = 1.2; ctx.stroke();
+  icon();
+  ctx.restore();
 }
 function drawCounterUi(){
   ctx.save();
@@ -2156,26 +2229,28 @@ function drawCounterUi(){
   blit(LADDER);
 
   var B = NEXT_BOX;
-  roundRect(B.x, B.y, B.w, B.h, 12);
+  ctx.save();
+  ctx.translate(B.x, B.y); ctx.scale(B.u, B.u);
+  roundRect(0, 0, B.w, B.h, 12);
   ctx.fillStyle = "rgba(25,12,4,.62)"; ctx.fill();
   ctx.strokeStyle = "rgba(255,210,150,.3)"; ctx.lineWidth = 1.2; ctx.stroke();
   ctx.font = "600 9px \"Trebuchet MS\", system-ui, sans-serif";
   ctx.fillStyle = "rgba(255,220,160,.7)";
-  ctx.fillText("СЛЕДУЮЩИЙ", B.x + B.w/2, B.y + B.h - 6);
-  var nt = S.queue[1];
-  drawFruitIcon(nt, B.x + B.w/2, B.y + 26, 36, 0.95);
+  ctx.fillText("СЛЕДУЮЩИЙ", B.w/2, B.h - 6);
+  drawFruitIcon(S.queue[1], B.w/2, 26, 36, 0.95);
+  ctx.restore();
 
-  roundBtn(BTN_SOUND);
-  ctx.font = "700 12px system-ui, sans-serif"; ctx.fillStyle = "#ffe0b0";
-  ctx.fillText(muted ? "OFF" : "ON", BTN_SOUND.x, BTN_SOUND.y + 4);
-
+  roundBtn(BTN_SOUND, function(){
+    ctx.font = "700 12px system-ui, sans-serif"; ctx.fillStyle = "#ffe0b0";
+    ctx.fillText(muted ? "OFF" : "ON", 0, 4);
+  });
   /* кнопка рекордов — три столбика пьедестала */
-  roundBtn(BTN_REC);
-  ctx.fillStyle = "#ffd75e";
-  var bx = BTN_REC.x, by = BTN_REC.y + 7;
-  ctx.fillRect(bx - 9,   by - 6,  5, 6);
-  ctx.fillRect(bx - 2.5, by - 12, 5, 12);
-  ctx.fillRect(bx + 4,   by - 9,  5, 9);
+  roundBtn(BTN_REC, function(){
+    ctx.fillStyle = "#ffd75e";
+    ctx.fillRect(-9,   1, 5, 6);
+    ctx.fillRect(-2.5, -5, 5, 12);
+    ctx.fillRect(4,    -2, 5, 9);
+  });
   ctx.restore();
 }
 
@@ -2506,8 +2581,7 @@ if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0){
 
 buildSprites();
 buildScene();
-bakeExt();
-LADDER = bake(LADDER_BOX.x, LADDER_BOX.y, LADDER_BOX.w, LADDER_BOX.h, drawLadderRaw);
+fitView(true);                      /* размер канвы, полосы фона, раскладка панелей и лестница */
 loadFruitArt();
 loadSceneArt();
 reset();
